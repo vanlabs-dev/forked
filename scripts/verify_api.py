@@ -27,8 +27,9 @@ def main() -> None:
         console.print(f"[red]Connection Error: {e}[/red]")
         sys.exit(1)
 
-    current_price = data.get("current_price") or data.get("currentPrice")
-    percentiles = data.get("percentiles") or data.get("data") or {}
+    current_price = data.get("current_price")
+    forecast_future = data.get("forecast_future", {})
+    percentiles = forecast_future.get("percentiles", [])
 
     table = Table(title="BTC 24h Prediction Percentiles")
     table.add_column("Field", style="cyan")
@@ -40,13 +41,20 @@ def main() -> None:
     if current_price is not None:
         table.add_row("Current Price", f"${current_price:,.2f}")
 
-    if isinstance(percentiles, dict):
-        table.add_row("Percentile Keys", ", ".join(str(k) for k in percentiles.keys()))
-    elif isinstance(percentiles, list):
-        table.add_row("Timepoints", str(len(percentiles)))
+    table.add_row("Forecast Timepoints", str(len(percentiles)))
 
-    # Show full response keys for debugging
-    table.add_row("Response Keys", ", ".join(data.keys()))
+    if percentiles:
+        first = percentiles[0]
+        last = percentiles[-1]
+        levels = sorted(first.keys())
+        table.add_row("Percentile Levels", ", ".join(levels))
+
+        p50_start = first.get("0.5")
+        p50_end = last.get("0.5")
+        if p50_start is not None:
+            table.add_row("Median (start)", f"${p50_start:,.2f}")
+        if p50_end is not None:
+            table.add_row("Median (end)", f"${p50_end:,.2f}")
 
     console.print(table)
     console.print("\n[green]API connection verified.[/green]\n")

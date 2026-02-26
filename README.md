@@ -63,6 +63,31 @@ See [docs/architecture.md](docs/architecture.md) for the full system design.
 
 BTC, ETH, SOL, XAU, SPY, NVDA, GOOGL, TSLA, AAPL
 
+## Deploy AlphaLog (VPS)
+
+AlphaLog continuously records Synth API predictions every hour, building a historical dataset for edge analysis.
+
+```bash
+git clone https://github.com/vanlabs-dev/forked.git
+cd forked
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+cp .env.example .env
+# Edit .env with your SYNTH_API_KEY
+
+# Test single collection
+python -m backend.collectors.runner --once
+
+# Run continuously (use screen/tmux/systemd)
+python -m backend.collectors.runner
+
+# Custom interval (seconds)
+python -m backend.collectors.runner --interval 1800
+```
+
+Data is saved to `data/snapshots/YYYY-MM-DD/` as JSON files. Logs are written to `data/logs/alphalog.log`.
+
 ## Links
 
 - [Synth API Docs](https://docs.synthdata.co)

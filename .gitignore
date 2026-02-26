@@ -52,3 +52,10 @@ htmlcov/
 # Misc
 *.log
 .claude/
+CLAUDE.md
+PLAYBOOK.md
+STATUS.md
+
+# Experiment logs (track experiment_log.md only)
+experiments/*.json
+experiments/*.csv

@@ -7,6 +7,7 @@ Usage:
     python -m backend.analysis.runner --cross      Cross-asset correlation and regime analysis
     python -m backend.analysis.runner --edges      Show open edges and recent resolutions
     python -m backend.analysis.runner --stats      Show cumulative edge performance
+    python -m backend.analysis.runner --trends     Historical trend analysis across all snapshots
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from backend.analysis.edge_detector import EdgeDetector
 from backend.analysis.anomaly_detector import AnomalyDetector
 from backend.analysis.edge_tracker import EdgeTracker
 from backend.analysis.cross_asset import CrossAssetAnalyzer
+from backend.analysis.trends import TrendAnalyzer
 
 SNAPSHOTS_DIR = Path("data/snapshots")
 
@@ -606,6 +608,144 @@ def cmd_stats() -> None:
         console.print(table)
 
 
+def cmd_trends() -> None:
+    """Historical trend analysis across all collected snapshots."""
+    trend_analyzer = TrendAnalyzer()
+    report = trend_analyzer.generate_report()
+
+    period = report["period"]
+    if not period.get("snapshots"):
+        console.print("[red]No snapshots found in data/snapshots/[/]")
+        sys.exit(1)
+
+    # Period summary
+    console.print(Panel(
+        f"Start: {period['start']}  |  End: {period['end']}  |  "
+        f"Snapshots: {period['snapshots']}  |  Hours: {period['hours_covered']}",
+        title="Data Coverage",
+    ))
+
+    # Per-asset summary stats
+    summaries = report["asset_summaries"]
+    if summaries:
+        table = Table(title="Asset Trend Summary", show_lines=True)
+        table.add_column("Asset", style="bold cyan", width=8)
+        table.add_column("TF", width=5)
+        table.add_column("SI Mean", justify="right", width=8)
+        table.add_column("SI Curr", justify="right", width=8)
+        table.add_column("SI %ile", justify="right", width=8)
+        table.add_column("Bias Trend", width=15)
+        table.add_column("Width Trend", width=13)
+        table.add_column("Skew Flips", justify="right", width=10)
+        table.add_column("Regimes", width=30)
+
+        trend_colors = {
+            "BULLISH_SHIFT": "green",
+            "BEARISH_SHIFT": "red",
+            "EXPANDING": "red",
+            "COMPRESSING": "yellow",
+            "STABLE": "dim",
+        }
+
+        for s in summaries:
+            si = s.get("synth_index", {})
+            bias = s.get("bias", {})
+            width = s.get("width", {})
+            skew = s.get("skew", {})
+            regimes = s.get("regime_breakdown", {})
+
+            si_mean = f"{si['mean']:.1f}" if si else "-"
+            si_curr = f"{si['current']:.1f}" if si else "-"
+            si_pct = f"{si['percentile_rank']}" if si else "-"
+
+            b_trend = bias.get("trend", "-")
+            b_color = trend_colors.get(b_trend, "white")
+            w_trend = width.get("trend", "-")
+            w_color = trend_colors.get(w_trend, "white")
+
+            regime_str = ", ".join(f"{r}:{pct}" for r, pct in regimes.items()) if regimes else "-"
+
+            table.add_row(
+                s["asset"],
+                s["horizon"],
+                si_mean,
+                si_curr,
+                si_pct,
+                f"[{b_color}]{b_trend}[/]",
+                f"[{w_color}]{w_trend}[/]",
+                str(skew.get("flips", "-")),
+                regime_str,
+            )
+
+        console.print()
+        console.print(table)
+
+    # Synth-Index trajectory (last 5 per asset-horizon)
+    si_history = report.get("synth_index_history", {})
+    if si_history:
+        table = Table(title="Synth-Index Trajectory (last 5)", show_lines=True)
+        table.add_column("Asset", style="bold cyan", width=12)
+        for i in range(5):
+            table.add_column(f"t-{4 - i}", justify="right", width=10)
+
+        level_colors = {
+            "EXTREME": "bold red",
+            "ELEVATED": "red",
+            "ABOVE_AVERAGE": "yellow",
+            "BELOW_AVERAGE": "green",
+            "CALM": "bold green",
+        }
+
+        for key in sorted(si_history.keys()):
+            points = si_history[key][-5:]
+            cells: list[str] = []
+            for _ in range(5 - len(points)):
+                cells.append("[dim]-[/]")
+            for p in points:
+                color = level_colors.get(p["level"], "white")
+                cells.append(f"[{color}]{p['value']:.1f}[/]")
+            table.add_row(key, *cells)
+
+        console.print()
+        console.print(table)
+
+    # Edge performance
+    edge_perf = report.get("edge_performance", {})
+    if edge_perf.get("insufficient_data"):
+        resolved_n = edge_perf.get("resolved", 0)
+        console.print(Panel(
+            f"Resolved edges: {resolved_n}  |  Need at least 5 for trend analysis.",
+            title="Edge Performance",
+            style="dim",
+        ))
+    else:
+        hr = edge_perf["overall_hit_rate"]
+        hr_color = "green" if hr > 0.55 else "yellow" if hr > 0.45 else "red"
+        pnl = edge_perf["overall_pnl"]
+        pnl_color = "green" if pnl > 0 else "red" if pnl < 0 else "white"
+
+        console.print(Panel(
+            f"Resolved: {edge_perf['total_resolved']}  |  "
+            f"Hit Rate: [{hr_color}]{hr:.1%}[/]  |  "
+            f"PnL: [{pnl_color}]${pnl:+.2f}[/]  |  "
+            f"Sharpe: {edge_perf['overall_sharpe']:.2f}",
+            title="Edge Performance",
+        ))
+
+        # Rolling hit rate (last 5 windows)
+        rolling = edge_perf.get("rolling_hit_rate", [])[-5:]
+        if rolling:
+            console.print("[bold]Rolling hit rate (last 5 windows of 10):[/]")
+            for r in rolling:
+                rhr = r["hit_rate_last_10"]
+                c = "green" if rhr > 0.55 else "yellow" if rhr > 0.45 else "red"
+                console.print(f"  {r['timestamp'][:19]}  [{c}]{rhr:.1%}[/]")
+
+    # Export
+    export_path = trend_analyzer.export_for_frontend()
+    console.print(f"\n[dim]Exported trend data to {export_path}[/]")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Synth-Index analysis runner",
@@ -618,6 +758,7 @@ def main() -> None:
     group.add_argument("--cross", action="store_true", help="Cross-asset correlation and regime analysis")
     group.add_argument("--edges", action="store_true", help="Show open edges and recent resolutions")
     group.add_argument("--stats", action="store_true", help="Show cumulative edge performance")
+    group.add_argument("--trends", action="store_true", help="Historical trend analysis across all snapshots")
 
     args = parser.parse_args()
 
@@ -633,6 +774,8 @@ def main() -> None:
         cmd_edges()
     elif args.stats:
         cmd_stats()
+    elif args.trends:
+        cmd_trends()
 
 
 if __name__ == "__main__":

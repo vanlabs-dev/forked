@@ -4,6 +4,7 @@ Usage:
     python -m backend.analysis.runner --latest     Analyze most recent snapshot
     python -m backend.analysis.runner --compare    Compare latest two snapshots
     python -m backend.analysis.runner --all        Analyze all local snapshots
+    python -m backend.analysis.runner --cross      Cross-asset correlation and regime analysis
     python -m backend.analysis.runner --edges      Show open edges and recent resolutions
     python -m backend.analysis.runner --stats      Show cumulative edge performance
 """
@@ -25,6 +26,7 @@ from backend.analysis.synth_index import SynthIndex
 from backend.analysis.edge_detector import EdgeDetector
 from backend.analysis.anomaly_detector import AnomalyDetector
 from backend.analysis.edge_tracker import EdgeTracker
+from backend.analysis.cross_asset import CrossAssetAnalyzer
 
 SNAPSHOTS_DIR = Path("data/snapshots")
 
@@ -201,6 +203,95 @@ def render_anomalies(anomalies: list[dict]) -> None:
     console.print(table)
 
 
+def render_cross_asset(cross_data: dict) -> None:
+    """Render cross-asset analysis output."""
+    # Group summaries
+    for group_name in ["crypto", "equities"]:
+        group = cross_data.get(group_name)
+        if not group:
+            continue
+
+        consensus = group.get("consensus", 0)
+        level = group.get("consensus_level", "?")
+        level_color = {"HIGH": "green", "MEDIUM": "yellow", "LOW": "red"}.get(level, "white")
+
+        avg_idx = group.get("avg_synth_index")
+        idx_str = f"{avg_idx:.1f}" if avg_idx is not None else "-"
+
+        header = (
+            f"[bold]{group_name.upper()}[/]  |  "
+            f"Consensus: [{level_color}]{consensus:.2f} ({level})[/]  |  "
+            f"Bias: {group.get('avg_bias', '-')}  |  "
+            f"Width: {group.get('avg_width', '-')}  |  "
+            f"Skew: {group.get('avg_skew', '-')}  |  "
+            f"Synth-Index: {idx_str}"
+        )
+        console.print(Panel(header))
+
+        outlier = group.get("outlier")
+        if outlier:
+            console.print(
+                f"  [bold yellow]OUTLIER:[/] {outlier['asset']} "
+                f"(similarity {outlier['avg_similarity']:.2f} vs group {outlier['group_mean_similarity']:.2f}, "
+                f"z={outlier['z_score']:.1f}) -- {outlier['reason']}"
+            )
+
+    # Cross-group regime
+    cg = cross_data.get("cross_group", {})
+    if cg:
+        regime = cg.get("regime", "?")
+        regime_colors = {
+            "RISK_ON": "bold green",
+            "RISK_OFF": "bold red",
+            "ROTATION": "bold yellow",
+            "DIVERGENT": "yellow",
+            "CALM": "green",
+            "MIXED": "white",
+        }
+        r_color = regime_colors.get(regime, "white")
+        corr = cg.get("correlation")
+        corr_str = f"{corr:.2f}" if corr is not None else "-"
+
+        console.print(Panel(
+            f"Regime: [{r_color}]{regime}[/]  |  "
+            f"Cross-group correlation: {corr_str}  |  "
+            f"Crypto bias: {cg.get('crypto_bias', '-')}  |  "
+            f"Equity bias: {cg.get('equity_bias', '-')}\n"
+            f"{cg.get('description', '')}",
+            title="Cross-Group Regime",
+        ))
+
+    # Similarity matrices
+    matrices = cross_data.get("similarity_matrices", {})
+    for group_name, matrix in matrices.items():
+        group = cross_data.get(group_name, {})
+        assets = group.get("assets", [])
+        if not assets or not matrix:
+            continue
+
+        table = Table(title=f"{group_name.title()} Similarity Matrix", show_lines=True)
+        table.add_column("", style="bold cyan", width=8)
+        for a in assets:
+            table.add_column(a, justify="right", width=8)
+
+        for i, asset in enumerate(assets):
+            row_vals: list[str] = []
+            for j in range(len(assets)):
+                val = matrix[i][j]
+                if i == j:
+                    row_vals.append("[dim]1.00[/]")
+                elif val >= 0.8:
+                    row_vals.append(f"[green]{val:.2f}[/]")
+                elif val >= 0.5:
+                    row_vals.append(f"[yellow]{val:.2f}[/]")
+                else:
+                    row_vals.append(f"[red]{val:.2f}[/]")
+            table.add_row(asset, *row_vals)
+
+        console.print()
+        console.print(table)
+
+
 def analyze_single(snapshot_path: Path, show_header: bool = True) -> tuple[dict, dict]:
     """Analyze a single snapshot and display results.
 
@@ -227,6 +318,12 @@ def analyze_single(snapshot_path: Path, show_header: bool = True) -> tuple[dict,
     console.print()
     console.print(render_index_table(index_data))
     render_edges(edges)
+
+    # Cross-asset analysis
+    cross_analyzer = CrossAssetAnalyzer()
+    cross_data = cross_analyzer.analyze(metrics, index_data)
+    console.print()
+    render_cross_asset(cross_data)
 
     return metrics, index_data
 
@@ -295,6 +392,30 @@ def cmd_all() -> None:
 
     if len(snapshots) > 1:
         console.print(f"\n\n[bold]Total anomalies across all snapshots: {len(all_anomalies)}[/]")
+
+
+def cmd_cross() -> None:
+    """Dedicated cross-asset analysis on the latest snapshot."""
+    snapshots = find_snapshots()
+    if not snapshots:
+        console.print("[red]No snapshots found in data/snapshots/[/]")
+        sys.exit(1)
+
+    latest = snapshots[-1]
+    snapshot = load_snapshot(latest)
+
+    ts = snapshot.get("timestamp", "unknown")
+    console.print(Panel(f"Cross-Asset Analysis  |  {ts}"))
+
+    analyzer = DistributionAnalyzer()
+    metrics = analyzer.analyze_snapshot(snapshot)
+
+    index = SynthIndex()
+    index_data = index.compute(metrics)
+
+    cross_analyzer = CrossAssetAnalyzer()
+    cross_data = cross_analyzer.analyze(metrics, index_data)
+    render_cross_asset(cross_data)
 
 
 def cmd_edges() -> None:
@@ -494,6 +615,7 @@ def main() -> None:
     group.add_argument("--latest", action="store_true", help="Analyze most recent snapshot")
     group.add_argument("--compare", action="store_true", help="Compare latest two snapshots")
     group.add_argument("--all", action="store_true", help="Analyze all local snapshots")
+    group.add_argument("--cross", action="store_true", help="Cross-asset correlation and regime analysis")
     group.add_argument("--edges", action="store_true", help="Show open edges and recent resolutions")
     group.add_argument("--stats", action="store_true", help="Show cumulative edge performance")
 
@@ -505,6 +627,8 @@ def main() -> None:
         cmd_compare()
     elif args.all:
         cmd_all()
+    elif args.cross:
+        cmd_cross()
     elif args.edges:
         cmd_edges()
     elif args.stats:

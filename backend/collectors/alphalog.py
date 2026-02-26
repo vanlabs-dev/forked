@@ -270,8 +270,38 @@ class AlphaLogCollector:
             logger.warning("Supabase save failed (non-fatal): %s", exc)
 
     def run_once(self) -> dict[str, Any]:
-        """Execute a single collection cycle: collect, save local, save Supabase."""
+        """Execute a single collection cycle: collect, save, analyze, track edges."""
         snapshot = self.collect_snapshot()
         self.save_local(snapshot)
         self.save_supabase(snapshot)
+        self._run_analysis(snapshot)
         return snapshot
+
+    def _run_analysis(self, snapshot: dict[str, Any]) -> None:
+        """Run the analysis pipeline on the collected snapshot.
+
+        Detects new edges, records them, and resolves any expired edges.
+        Wrapped in try/except so analysis failures never prevent data collection.
+        """
+        try:
+            from backend.analysis.distribution import DistributionAnalyzer
+            from backend.analysis.edge_detector import EdgeDetector
+            from backend.analysis.edge_tracker import EdgeTracker
+
+            analyzer = DistributionAnalyzer()
+            metrics = analyzer.analyze_snapshot(snapshot)
+
+            detector = EdgeDetector()
+            edges = detector.detect_edges(snapshot, metrics)
+
+            tracker = EdgeTracker()
+            new_count = tracker.record_edges(edges, snapshot)
+
+            resolved_count, correct_count = tracker.resolve_edges(snapshot)
+
+            logger.info(
+                "Analysis: %d new edge(s) detected, %d resolved (%d correct)",
+                new_count, resolved_count, correct_count,
+            )
+        except Exception:
+            logger.exception("Analysis pipeline failed (non-fatal)")

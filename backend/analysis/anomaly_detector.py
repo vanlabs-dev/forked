@@ -116,7 +116,7 @@ class AnomalyDetector:
                 "change_pct": round(change_pct, 4),
                 "description": (
                     f"{asset} tails fattened by {change_pct:.0%} "
-                    f"({prev_tail:.2f} → {curr_tail:.2f})"
+                    f"({prev_tail:.2f} -> {curr_tail:.2f})"
                 ),
             }
         ]
@@ -139,13 +139,13 @@ class AnomalyDetector:
             anomaly_type = "volatility_expansion"
             description = (
                 f"{asset} forecast width expanded by {abs_change:.0%} "
-                f"({prev_width:.4%} → {curr_width:.4%})"
+                f"({prev_width:.4%} -> {curr_width:.4%})"
             )
         else:
             anomaly_type = "volatility_compression"
             description = (
                 f"{asset} forecast width compressed by {abs_change:.0%} "
-                f"({prev_width:.4%} → {curr_width:.4%})"
+                f"({prev_width:.4%} -> {curr_width:.4%})"
             )
 
         return [

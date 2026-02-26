@@ -38,3 +38,6 @@ POLYMARKET_RANGE_ASSETS: list[str] = ["BTC", "ETH", "SOL", "NVDA", "GOOGL", "TSL
 # Default parameters for leaderboard/prediction queries
 DEFAULT_DAYS: int = 14
 DEFAULT_MINER_LIMIT: int = 10
+
+# AlphaLog collection interval in seconds
+ALPHALOG_INTERVAL: int = int(os.getenv("ALPHALOG_INTERVAL", "3600"))

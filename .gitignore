@@ -24,6 +24,8 @@ data/*.csv
 data/*.json
 data/*.parquet
 data/*.db
+data/snapshots/
+data/logs/
 !data/.gitkeep
 
 # Node

@@ -4,6 +4,8 @@ Usage:
     python -m backend.analysis.runner --latest     Analyze most recent snapshot
     python -m backend.analysis.runner --compare    Compare latest two snapshots
     python -m backend.analysis.runner --all        Analyze all local snapshots
+    python -m backend.analysis.runner --edges      Show open edges and recent resolutions
+    python -m backend.analysis.runner --stats      Show cumulative edge performance
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from backend.analysis.distribution import DistributionAnalyzer
 from backend.analysis.synth_index import SynthIndex
 from backend.analysis.edge_detector import EdgeDetector
 from backend.analysis.anomaly_detector import AnomalyDetector
+from backend.analysis.edge_tracker import EdgeTracker
 
 SNAPSHOTS_DIR = Path("data/snapshots")
 
@@ -294,6 +297,194 @@ def cmd_all() -> None:
         console.print(f"\n\n[bold]Total anomalies across all snapshots: {len(all_anomalies)}[/]")
 
 
+def cmd_edges() -> None:
+    """Show current open edges and recent resolutions."""
+    tracker = EdgeTracker()
+
+    open_edges = tracker.get_open_edges()
+    if open_edges:
+        table = Table(title=f"Open Edges ({len(open_edges)})", show_lines=True)
+        table.add_column("Asset", style="bold cyan", width=8)
+        table.add_column("Type", width=22)
+        table.add_column("TF", width=8)
+        table.add_column("Dir", width=14)
+        table.add_column("Conf", width=8)
+        table.add_column("Edge", justify="right", width=8)
+        table.add_column("Deadline", width=22)
+        table.add_column("Detected", width=22)
+
+        conf_colors = {"HIGH": "bold red", "MEDIUM": "yellow", "LOW": "dim"}
+
+        for e in open_edges:
+            color = conf_colors.get(e.get("confidence", ""), "white")
+            edge_size = e.get("edge_size")
+            edge_str = f"{edge_size:.1%}" if edge_size is not None else "-"
+            deadline = e.get("resolution_deadline", "")
+            if isinstance(deadline, str) and len(deadline) > 19:
+                deadline = deadline[:19]
+            detected = e.get("detected_at", "")
+            if isinstance(detected, str) and len(detected) > 19:
+                detected = detected[:19]
+
+            table.add_row(
+                e.get("asset", ""),
+                e.get("edge_type", ""),
+                e.get("timeframe", ""),
+                e.get("direction", ""),
+                f"[{color}]{e.get('confidence', '')}[/]",
+                edge_str,
+                deadline,
+                detected,
+            )
+        console.print(table)
+    else:
+        console.print("[dim]No open edges.[/]")
+
+    resolved = tracker.get_resolved_edges(limit=20)
+    if resolved:
+        console.print()
+        table = Table(title=f"Recent Resolutions (last {len(resolved)})", show_lines=True)
+        table.add_column("Asset", style="bold cyan", width=8)
+        table.add_column("Type", width=22)
+        table.add_column("Dir", width=14)
+        table.add_column("Result", width=12)
+        table.add_column("PnL", justify="right", width=10)
+        table.add_column("Outcome", width=8)
+        table.add_column("Resolved At", width=22)
+
+        for e in reversed(resolved):
+            resolution = e.get("resolution", "")
+            if resolution == "CORRECT":
+                res_str = "[bold green]CORRECT[/]"
+            elif resolution == "INCORRECT":
+                res_str = "[bold red]INCORRECT[/]"
+            else:
+                res_str = f"[dim]{resolution}[/]"
+
+            pnl = e.get("pnl")
+            if pnl is not None:
+                pnl_str = f"[green]+${pnl:.2f}[/]" if pnl > 0 else f"[red]-${abs(pnl):.2f}[/]"
+            else:
+                pnl_str = "-"
+
+            resolved_at = e.get("resolved_at", "")
+            if isinstance(resolved_at, str) and len(resolved_at) > 19:
+                resolved_at = resolved_at[:19]
+
+            table.add_row(
+                e.get("asset", ""),
+                e.get("edge_type", ""),
+                e.get("direction", ""),
+                res_str,
+                pnl_str,
+                e.get("actual_outcome", ""),
+                resolved_at,
+            )
+        console.print(table)
+    else:
+        console.print("\n[dim]No resolved edges yet.[/]")
+
+
+def cmd_stats() -> None:
+    """Show cumulative edge performance statistics."""
+    tracker = EdgeTracker()
+    stats = tracker.get_stats()
+
+    # Summary panel
+    hit_rate = stats["hit_rate"]
+    hr_color = "green" if hit_rate > 0.55 else "yellow" if hit_rate > 0.45 else "red"
+    pnl = stats["total_pnl"]
+    pnl_color = "green" if pnl > 0 else "red" if pnl < 0 else "white"
+
+    summary = (
+        f"Detected: {stats['total_edges_detected']}  |  "
+        f"Resolved: {stats['total_resolved']}  |  "
+        f"Open: {stats['total_open']}  |  "
+        f"Hit Rate: [{hr_color}]{hit_rate:.1%}[/]  |  "
+        f"PnL: [{pnl_color}]${pnl:+.2f}[/]  |  "
+        f"Sharpe: {stats['sharpe_ratio']:.2f}"
+    )
+    console.print(Panel(summary, title="Edge Performance Summary"))
+
+    if not stats["total_resolved"]:
+        console.print("\n[dim]No resolved edges yet. Stats will populate as edges resolve.[/]")
+        return
+
+    # By asset
+    if stats["by_asset"]:
+        table = Table(title="Performance by Asset", show_lines=True)
+        table.add_column("Asset", style="bold cyan", width=10)
+        table.add_column("Total", justify="right", width=8)
+        table.add_column("Correct", justify="right", width=8)
+        table.add_column("Hit Rate", justify="right", width=10)
+        table.add_column("PnL", justify="right", width=10)
+        table.add_column("Avg PnL", justify="right", width=10)
+
+        for asset, s in sorted(stats["by_asset"].items()):
+            hr = s["hit_rate"]
+            hr_c = "green" if hr > 0.55 else "yellow" if hr > 0.45 else "red"
+            p = s["total_pnl"]
+            p_c = "green" if p > 0 else "red" if p < 0 else "white"
+            table.add_row(
+                asset,
+                str(s["total"]),
+                str(s["correct"]),
+                f"[{hr_c}]{hr:.1%}[/]",
+                f"[{p_c}]${p:+.2f}[/]",
+                f"${s['avg_pnl']:+.2f}",
+            )
+        console.print()
+        console.print(table)
+
+    # By edge type
+    if stats["by_edge_type"]:
+        table = Table(title="Performance by Edge Type", show_lines=True)
+        table.add_column("Edge Type", style="bold cyan", width=24)
+        table.add_column("Total", justify="right", width=8)
+        table.add_column("Correct", justify="right", width=8)
+        table.add_column("Hit Rate", justify="right", width=10)
+        table.add_column("PnL", justify="right", width=10)
+
+        for etype, s in sorted(stats["by_edge_type"].items()):
+            hr = s["hit_rate"]
+            hr_c = "green" if hr > 0.55 else "yellow" if hr > 0.45 else "red"
+            p = s["total_pnl"]
+            p_c = "green" if p > 0 else "red" if p < 0 else "white"
+            table.add_row(
+                etype,
+                str(s["total"]),
+                str(s["correct"]),
+                f"[{hr_c}]{hr:.1%}[/]",
+                f"[{p_c}]${p:+.2f}[/]",
+            )
+        console.print()
+        console.print(table)
+
+    # By confidence
+    if stats["by_confidence"]:
+        table = Table(title="Performance by Confidence", show_lines=True)
+        table.add_column("Confidence", style="bold cyan", width=12)
+        table.add_column("Total", justify="right", width=8)
+        table.add_column("Correct", justify="right", width=8)
+        table.add_column("Hit Rate", justify="right", width=10)
+        table.add_column("PnL", justify="right", width=10)
+
+        for conf, s in sorted(stats["by_confidence"].items()):
+            hr = s["hit_rate"]
+            hr_c = "green" if hr > 0.55 else "yellow" if hr > 0.45 else "red"
+            p = s["total_pnl"]
+            p_c = "green" if p > 0 else "red" if p < 0 else "white"
+            table.add_row(
+                conf,
+                str(s["total"]),
+                str(s["correct"]),
+                f"[{hr_c}]{hr:.1%}[/]",
+                f"[{p_c}]${p:+.2f}[/]",
+            )
+        console.print()
+        console.print(table)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Synth-Index analysis runner",
@@ -303,6 +494,8 @@ def main() -> None:
     group.add_argument("--latest", action="store_true", help="Analyze most recent snapshot")
     group.add_argument("--compare", action="store_true", help="Compare latest two snapshots")
     group.add_argument("--all", action="store_true", help="Analyze all local snapshots")
+    group.add_argument("--edges", action="store_true", help="Show open edges and recent resolutions")
+    group.add_argument("--stats", action="store_true", help="Show cumulative edge performance")
 
     args = parser.parse_args()
 
@@ -312,6 +505,10 @@ def main() -> None:
         cmd_compare()
     elif args.all:
         cmd_all()
+    elif args.edges:
+        cmd_edges()
+    elif args.stats:
+        cmd_stats()
 
 
 if __name__ == "__main__":

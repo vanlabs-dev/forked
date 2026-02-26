@@ -16,6 +16,7 @@ from typing import Any
 
 from backend.config import (
     ASSETS,
+    OPTION_PRICING_ASSETS,
     PERCENTILES_1H_ASSETS,
     POLYMARKET_DAILY_ASSETS,
     POLYMARKET_RANGE_ASSETS,
@@ -94,7 +95,10 @@ class AlphaLogCollector:
             "percentiles_1h": {},
             "polymarket_daily": {},
             "polymarket_hourly": {},
+            "polymarket_15min": {},
             "polymarket_range": {},
+            "option_pricing_24h": {},
+            "lp_probabilities_24h": {},
             "volatility_24h": {},
             "errors": [],
         }
@@ -130,6 +134,14 @@ class AlphaLogCollector:
         else:
             logger.debug("  %s: skipping polymarket_hourly (unsupported)", asset)
 
+        # Polymarket 15min up/down — crypto only
+        if asset in POLYMARKET_SHORT_TERM_ASSETS:
+            self._fetch_endpoint(
+                result, "polymarket_15min", "get_polymarket_updown_15min", asset=asset,
+            )
+        else:
+            logger.debug("  %s: skipping polymarket_15min (unsupported)", asset)
+
         # Polymarket range
         if asset in POLYMARKET_RANGE_ASSETS:
             self._fetch_endpoint(
@@ -137,6 +149,19 @@ class AlphaLogCollector:
             )
         else:
             logger.debug("  %s: skipping polymarket_range (unsupported)", asset)
+
+        # Option pricing 24h
+        if asset in OPTION_PRICING_ASSETS:
+            self._fetch_endpoint(
+                result, "option_pricing_24h", "get_option_pricing", asset=asset, horizon="24h",
+            )
+        else:
+            logger.debug("  %s: skipping option_pricing_24h (unsupported)", asset)
+
+        # LP probabilities 24h — all assets
+        self._fetch_endpoint(
+            result, "lp_probabilities_24h", "get_lp_probabilities", asset=asset, horizon="24h",
+        )
 
         # Volatility 24h — all assets
         self._fetch_endpoint(
@@ -228,11 +253,16 @@ class AlphaLogCollector:
             from supabase import create_client
 
             client = create_client(SUPABASE_URL, SUPABASE_KEY)
+            error_count = sum(
+                len(a.get("errors", [])) for a in snapshot["assets"].values()
+            ) + len(snapshot.get("collection_errors", []))
+
             client.table("alphalog_snapshots").insert({
                 "timestamp": snapshot["timestamp"],
                 "data": snapshot,
                 "partial": snapshot["partial"],
                 "asset_count": len(snapshot["assets"]),
+                "error_count": error_count,
                 "duration_ms": snapshot["collection_duration_ms"],
             }).execute()
             logger.info("Saved to Supabase")

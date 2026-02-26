@@ -55,5 +55,7 @@ Real-time dashboard for monitoring detected edges, market state, and system heal
 | Liquidation | `/insights/liquidation` | All |
 | LP Bounds | `/insights/lp-bounds` | All |
 | LP Probabilities | `/insights/lp-probabilities` | All |
-| Best Prediction | `/v2/prediction/best` | All |
-| Meta Leaderboard | `/v2/meta-leaderboard/latest` | N/A |
+| Best Prediction | `/v2/prediction/best` | All (requires elevated API access) |
+| Meta Leaderboard | `/v2/meta-leaderboard/latest` | N/A (requires elevated API access) |
+
+> **Note:** The `/v2/prediction/*` and `/v2/meta-leaderboard/*` endpoints return 401 on the Pro API plan. They are retained in the client for completeness but are not used by the collector.

@@ -16,6 +16,8 @@ from typing import Any
 
 from backend.config import (
     ASSETS,
+    PERCENTILES_1H_ASSETS,
+    POLYMARKET_DAILY_ASSETS,
     POLYMARKET_RANGE_ASSETS,
     POLYMARKET_SHORT_TERM_ASSETS,
     SUPABASE_KEY,
@@ -24,14 +26,6 @@ from backend.config import (
 from backend.synth_client import SynthAPIError, SynthClient
 
 logger = logging.getLogger("alphalog")
-
-# Endpoints that apply to all assets
-_ALL_ASSET_ENDPOINTS: list[tuple[str, str]] = [
-    ("percentiles_24h", "prediction_percentiles_24h"),
-    ("percentiles_1h", "prediction_percentiles_1h"),
-    ("polymarket_daily", "polymarket_updown_daily"),
-    ("volatility_24h", "volatility_24h"),
-]
 
 # Max retries and backoff for individual endpoint calls
 _MAX_RETRIES = 3
@@ -69,8 +63,31 @@ class AlphaLogCollector:
 
         raise last_error  # type: ignore[misc]
 
+    def _fetch_endpoint(
+        self,
+        result: dict[str, Any],
+        key: str,
+        method: str,
+        extract_price: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Fetch a single endpoint into result[key], recording errors."""
+        try:
+            data = self._call_with_retry(method, **kwargs)
+            result[key] = data
+            if extract_price and result["current_price"] is None and isinstance(data, dict):
+                result["current_price"] = data.get("current_price")
+        except SynthAPIError as exc:
+            if exc.status_code in (401, 403):
+                raise
+            result["errors"].append(f"{key}: {exc}")
+            logger.warning("  %s %s failed: %s", kwargs.get("asset", "?"), key, exc)
+        except Exception as exc:
+            result["errors"].append(f"{key}: {exc}")
+            logger.warning("  %s %s failed: %s", kwargs.get("asset", "?"), key, exc)
+
     def _collect_asset(self, asset: str) -> dict[str, Any]:
-        """Collect all available endpoint data for a single asset."""
+        """Collect all supported endpoint data for a single asset."""
         result: dict[str, Any] = {
             "current_price": None,
             "percentiles_24h": {},
@@ -82,89 +99,49 @@ class AlphaLogCollector:
             "errors": [],
         }
 
-        # Percentiles 24h
-        try:
-            data = self._call_with_retry("get_prediction_percentiles", asset=asset, horizon="24h")
-            result["percentiles_24h"] = data
-            if result["current_price"] is None and isinstance(data, dict):
-                result["current_price"] = data.get("current_price")
-        except SynthAPIError as exc:
-            if exc.status_code in (401, 403):
-                raise
-            result["errors"].append(f"percentiles_24h: {exc}")
-            logger.warning("  %s percentiles_24h failed: %s", asset, exc)
-        except Exception as exc:
-            result["errors"].append(f"percentiles_24h: {exc}")
-            logger.warning("  %s percentiles_24h failed: %s", asset, exc)
+        # Percentiles 24h — all assets
+        self._fetch_endpoint(
+            result, "percentiles_24h", "get_prediction_percentiles",
+            extract_price=True, asset=asset, horizon="24h",
+        )
 
-        # Percentiles 1h
-        try:
-            data = self._call_with_retry("get_prediction_percentiles", asset=asset, horizon="1h")
-            result["percentiles_1h"] = data
-            if result["current_price"] is None and isinstance(data, dict):
-                result["current_price"] = data.get("current_price")
-        except SynthAPIError as exc:
-            if exc.status_code in (401, 403):
-                raise
-            result["errors"].append(f"percentiles_1h: {exc}")
-            logger.warning("  %s percentiles_1h failed: %s", asset, exc)
-        except Exception as exc:
-            result["errors"].append(f"percentiles_1h: {exc}")
-            logger.warning("  %s percentiles_1h failed: %s", asset, exc)
+        # Percentiles 1h — crypto + gold only
+        if asset in PERCENTILES_1H_ASSETS:
+            self._fetch_endpoint(
+                result, "percentiles_1h", "get_prediction_percentiles",
+                extract_price=True, asset=asset, horizon="1h",
+            )
+        else:
+            logger.debug("  %s: skipping percentiles_1h (unsupported)", asset)
 
-        # Polymarket daily (all assets support daily)
-        try:
-            data = self._call_with_retry("get_polymarket_updown_daily", asset=asset)
-            result["polymarket_daily"] = data
-        except SynthAPIError as exc:
-            if exc.status_code in (401, 403):
-                raise
-            result["errors"].append(f"polymarket_daily: {exc}")
-            logger.warning("  %s polymarket_daily failed: %s", asset, exc)
-        except Exception as exc:
-            result["errors"].append(f"polymarket_daily: {exc}")
-            logger.warning("  %s polymarket_daily failed: %s", asset, exc)
+        # Polymarket daily up/down
+        if asset in POLYMARKET_DAILY_ASSETS:
+            self._fetch_endpoint(
+                result, "polymarket_daily", "get_polymarket_updown_daily", asset=asset,
+            )
+        else:
+            logger.debug("  %s: skipping polymarket_daily (unsupported)", asset)
 
-        # Polymarket hourly (BTC, ETH, SOL only)
+        # Polymarket hourly up/down — crypto only
         if asset in POLYMARKET_SHORT_TERM_ASSETS:
-            try:
-                data = self._call_with_retry("get_polymarket_updown_hourly", asset=asset)
-                result["polymarket_hourly"] = data
-            except SynthAPIError as exc:
-                if exc.status_code in (401, 403):
-                    raise
-                result["errors"].append(f"polymarket_hourly: {exc}")
-                logger.warning("  %s polymarket_hourly failed: %s", asset, exc)
-            except Exception as exc:
-                result["errors"].append(f"polymarket_hourly: {exc}")
-                logger.warning("  %s polymarket_hourly failed: %s", asset, exc)
+            self._fetch_endpoint(
+                result, "polymarket_hourly", "get_polymarket_updown_hourly", asset=asset,
+            )
+        else:
+            logger.debug("  %s: skipping polymarket_hourly (unsupported)", asset)
 
-        # Polymarket range (subset of assets)
+        # Polymarket range
         if asset in POLYMARKET_RANGE_ASSETS:
-            try:
-                data = self._call_with_retry("get_polymarket_range", asset=asset)
-                result["polymarket_range"] = data
-            except SynthAPIError as exc:
-                if exc.status_code in (401, 403):
-                    raise
-                result["errors"].append(f"polymarket_range: {exc}")
-                logger.warning("  %s polymarket_range failed: %s", asset, exc)
-            except Exception as exc:
-                result["errors"].append(f"polymarket_range: {exc}")
-                logger.warning("  %s polymarket_range failed: %s", asset, exc)
+            self._fetch_endpoint(
+                result, "polymarket_range", "get_polymarket_range", asset=asset,
+            )
+        else:
+            logger.debug("  %s: skipping polymarket_range (unsupported)", asset)
 
-        # Volatility 24h
-        try:
-            data = self._call_with_retry("get_volatility", asset=asset, horizon="24h")
-            result["volatility_24h"] = data
-        except SynthAPIError as exc:
-            if exc.status_code in (401, 403):
-                raise
-            result["errors"].append(f"volatility_24h: {exc}")
-            logger.warning("  %s volatility_24h failed: %s", asset, exc)
-        except Exception as exc:
-            result["errors"].append(f"volatility_24h: {exc}")
-            logger.warning("  %s volatility_24h failed: %s", asset, exc)
+        # Volatility 24h — all assets
+        self._fetch_endpoint(
+            result, "volatility_24h", "get_volatility", asset=asset, horizon="24h",
+        )
 
         return result
 

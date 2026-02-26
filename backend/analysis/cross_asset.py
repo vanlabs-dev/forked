@@ -84,12 +84,17 @@ class CrossAssetAnalyzer:
         group_summaries: dict[str, dict] = {}
         similarity_matrices: dict[str, list[list[float]]] = {}
 
+        # Collect all vectors across all groups for global normalization
+        all_vectors = self._collect_all_vectors("24h", distribution_metrics)
+
         for group_name, assets in self._groups.items():
             group_metrics = self._collect_group_metrics(assets, "24h", distribution_metrics)
             if len(group_metrics) < 2:
                 continue
 
-            sim_matrix, asset_order = self._compute_similarity_matrix(group_metrics)
+            sim_matrix, asset_order = self._compute_similarity_matrix(
+                group_metrics, all_vectors,
+            )
             consensus = self._compute_consensus(sim_matrix)
             outlier = self._detect_outlier(sim_matrix, asset_order, group_metrics)
             avg_metrics = self._compute_group_averages(group_metrics)
@@ -148,18 +153,40 @@ class CrossAssetAnalyzer:
         return group
 
     def _compute_similarity_matrix(
-        self, group_metrics: dict[str, dict],
+        self,
+        group_metrics: dict[str, dict],
+        all_vectors: list[list[float]],
     ) -> tuple[list[list[float]], list[str]]:
-        """Build NxN cosine similarity matrix for the group."""
+        """Build NxN cosine similarity matrix for the group.
+
+        Z-score normalizes against ALL assets (not just the group) so that
+        within-group comparisons reflect real differences vs the broader market.
+        """
         assets = sorted(group_metrics.keys())
-        vectors = {a: _extract_shape_vector(group_metrics[a]) for a in assets}
+        raw_vectors = {a: _extract_shape_vector(group_metrics[a]) for a in assets}
         n = len(assets)
+
+        if len(all_vectors) < 2:
+            return [[1.0] * n for _ in range(n)], assets
+
+        ndims = len(all_vectors[0])
+        means = [sum(v[d] for v in all_vectors) / len(all_vectors) for d in range(ndims)]
+        stds = [
+            (sum((v[d] - means[d]) ** 2 for v in all_vectors) / (len(all_vectors) - 1)) ** 0.5
+            for d in range(ndims)
+        ]
+
+        def normalize_vec(v: list[float]) -> list[float]:
+            return [(v[d] - means[d]) / stds[d] if stds[d] > 0 else 0.0 for d in range(ndims)]
+
+        normed = {a: normalize_vec(v) if v is not None else None for a, v in raw_vectors.items()}
+
         matrix: list[list[float]] = []
         for i in range(n):
             row: list[float] = []
             for j in range(n):
-                vi = vectors[assets[i]]
-                vj = vectors[assets[j]]
+                vi = normed[assets[i]]
+                vj = normed[assets[j]]
                 if vi is not None and vj is not None:
                     row.append(_cosine_similarity(vi, vj))
                 else:
@@ -299,7 +326,7 @@ class CrossAssetAnalyzer:
         crypto_width = self._parse_pct(crypto_summary.get("avg_width", "0"))
         equity_width = self._parse_pct(equity_summary.get("avg_width", "0"))
 
-        # Cross-group shape vector correlation
+        # Cross-group shape vector correlation (z-score normalized)
         crypto_vec = self._group_avg_vector(
             sorted(CRYPTO_ASSETS), "24h", distribution_metrics,
         )
@@ -308,7 +335,20 @@ class CrossAssetAnalyzer:
         )
 
         if crypto_vec and equity_vec:
-            cross_corr = _cosine_similarity(crypto_vec, equity_vec)
+            # Z-score normalize using all individual asset vectors as reference population
+            all_vecs = self._collect_all_vectors("24h", distribution_metrics)
+            if len(all_vecs) >= 3:
+                ndims = len(crypto_vec)
+                means = [sum(v[d] for v in all_vecs) / len(all_vecs) for d in range(ndims)]
+                stds = [
+                    (sum((v[d] - means[d]) ** 2 for v in all_vecs) / (len(all_vecs) - 1)) ** 0.5
+                    for d in range(ndims)
+                ]
+                norm_c = [(crypto_vec[d] - means[d]) / stds[d] if stds[d] > 0 else 0.0 for d in range(ndims)]
+                norm_e = [(equity_vec[d] - means[d]) / stds[d] if stds[d] > 0 else 0.0 for d in range(ndims)]
+                cross_corr = _cosine_similarity(norm_c, norm_e)
+            else:
+                cross_corr = _cosine_similarity(crypto_vec, equity_vec)
         else:
             cross_corr = 0.0
 
@@ -342,6 +382,15 @@ class CrossAssetAnalyzer:
             crypto_dir = "bullish" if crypto_bullish else "bearish" if crypto_bearish else "neutral"
             equity_dir = "bullish" if equity_bullish else "bearish" if equity_bearish else "neutral"
             desc = f"Crypto {crypto_dir}, equities {equity_dir} -- sector rotation signal"
+        elif crypto_stressed and not equity_stressed:
+            regime = "ROTATION"
+            desc = "Crypto elevated uncertainty while equities contained -- divergent risk"
+        elif equity_stressed and not crypto_stressed:
+            regime = "ROTATION"
+            desc = "Equities elevated uncertainty while crypto contained -- divergent risk"
+        elif crypto_stressed and equity_stressed:
+            regime = "RISK_OFF"
+            desc = "Elevated uncertainty across both asset classes"
         elif not crypto_stressed and not equity_stressed:
             regime = "CALM"
             desc = "Both groups showing contained distributions with no strong directional signal"
@@ -356,6 +405,21 @@ class CrossAssetAnalyzer:
             "equity_bias": f"{equity_bias:+.2%}",
             "description": desc,
         }
+
+    def _collect_all_vectors(
+        self, horizon: str, distribution_metrics: dict,
+    ) -> list[list[float]]:
+        """Collect shape vectors for all assets with data on this horizon."""
+        all_vecs: list[list[float]] = []
+        for group_assets in self._groups.values():
+            for asset in group_assets:
+                key = f"{asset}_{horizon}"
+                m = distribution_metrics.get(key)
+                if m:
+                    vec = _extract_shape_vector(m)
+                    if vec:
+                        all_vecs.append(vec)
+        return all_vecs
 
     def _group_avg_vector(
         self, assets: list[str], horizon: str, distribution_metrics: dict,

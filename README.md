@@ -1,27 +1,23 @@
-# Forked
+# Prism
 
-> Where probability paths diverge, edge emerges.
+> See risk before it moves.
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License MIT](https://img.shields.io/badge/license-MIT-green)
 ![Synth API](https://img.shields.io/badge/Synth-SN50-purple)
 
-**Prediction markets intelligence tool leveraging Synth's probabilistic price forecasts to find actionable edges in Polymarket.**
+**Personal risk intelligence tool powered by Synth's probability forecasts.** Probability explorer and position risk scanner built on Synth percentile data from Bittensor Subnet 50.
 
 Built for the [Synth Predictive Intelligence Hackathon](https://www.synthdata.co/) (Feb–Mar 2026) in the **Best Prediction Markets Tool** category.
 
 ---
 
-## Overview
-
-Forked consumes ensemble probabilistic forecasts from the Synth API (Bittensor Subnet 50) and compares them against live Polymarket odds to surface mispriced contracts. The system continuously monitors price distributions, computes fair probabilities, and identifies statistically significant divergences that represent tradable edge.
-
 ## Quick Start
 
 ```bash
 # Clone the repo
-git clone https://github.com/vanlabs-dev/forked.git
-cd forked
+git clone https://github.com/vanlabs-dev/prism.git
+cd prism
 
 # Create virtual environment
 python -m venv .venv
@@ -38,38 +34,17 @@ cp .env.example .env
 python scripts/verify_api.py
 ```
 
-## Architecture
-
-See [docs/architecture.md](docs/architecture.md) for the full system design.
-
-```
-┌─────────────┐     ┌──────────────┐     ┌──────────────┐
-│  Synth API   │────▶│  Collectors   │────▶│   Supabase   │
-│  (SN50)      │     │              │     │   (Storage)  │
-└─────────────┘     └──────────────┘     └──────┬───────┘
-                                                │
-                    ┌──────────────┐             │
-                    │   Analysis   │◀────────────┘
-                    │   Engines    │
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │  Dashboard   │
-                    │  (Frontend)  │
-                    └──────────────┘
-```
-
 ## Supported Assets
 
 BTC, ETH, SOL, XAU, SPY, NVDA, GOOGL, TSLA, AAPL
 
 ## Deploy AlphaLog (VPS)
 
-AlphaLog continuously records Synth API predictions every hour, building a historical dataset for edge analysis.
+AlphaLog continuously records Synth API predictions every hour, building a historical dataset.
 
 ```bash
-git clone https://github.com/vanlabs-dev/forked.git
-cd forked
+git clone https://github.com/vanlabs-dev/prism.git
+cd prism
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .

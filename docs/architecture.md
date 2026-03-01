@@ -1,8 +1,8 @@
-# Forked — Architecture
+# Prism — Architecture
 
 ## System Overview
 
-Forked is a prediction markets intelligence platform that identifies mispriced contracts on Polymarket by comparing live market odds against Synth's ensemble probabilistic forecasts.
+Prism is a personal risk intelligence tool that uses Synth's ensemble probabilistic forecasts (Bittensor Subnet 50) for probability exploration and position risk scanning.
 
 ## Data Flow
 
@@ -16,10 +16,10 @@ Collectors (scheduled jobs)
 Supabase (persistent storage)
     │
     ▼
-Analysis Engines (edge detection, signal scoring)
+Risk Engine (probability explorer, position scanner)
     │
     ▼
-Dashboard (real-time visualization)
+Dashboard (visualization)
 ```
 
 ## Components
@@ -30,16 +30,8 @@ Typed wrapper around the Synth REST API. Handles authentication, retries, and re
 ### Collectors (`backend/collectors/`)
 Scheduled data collection jobs that poll Synth endpoints at configured intervals and persist results to Supabase. Each collector targets a specific data domain (predictions, polymarket odds, volatility, etc.).
 
-### Analysis Engines (`backend/analysis/`)
-Statistical analysis modules that process collected data to identify actionable edge:
-- **Edge Detector**: Compares Synth fair probabilities against Polymarket odds to find divergences
-- **Signal Scorer**: Ranks opportunities by expected value and confidence
-
 ### Models (`backend/models/`)
 Pydantic data models for API responses, database schemas, and internal data structures.
-
-### Frontend (`frontend/`)
-Real-time dashboard for monitoring detected edges, market state, and system health.
 
 ## Supported Synth Endpoints
 

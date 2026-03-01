@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "forked"
+name = "prism"
 version = "0.1.0"
-description = "Prediction markets intelligence tool leveraging Synth probabilistic forecasts"
+description = "Personal risk intelligence tool powered by Synth probability forecasts"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"

@@ -1,1 +1,5 @@
-# Analysis modules retired to legacy/ during Prism pivot.
+from backend.analysis.probability import ProbabilityEngine
+
+__all__ = [
+    "ProbabilityEngine",
+]

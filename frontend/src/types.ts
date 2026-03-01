@@ -92,4 +92,6 @@ export interface ConeRenderData {
   maxPrice: number;
   currentPrice: number;
   volatility: number;
+  /** Total p995–p005 spread at the final timepoint, as a fraction of currentPrice. */
+  spreadPct: number;
 }

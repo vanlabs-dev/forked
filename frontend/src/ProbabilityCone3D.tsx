@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
@@ -14,6 +14,14 @@ interface ProbabilityCone3DProps {
   stopLoss?: number;
 }
 
+/** Reference spread: 15% of current price = full visual width (16 units). */
+const REF_SPREAD = 0.15;
+const MIN_SCALE = 0.08;
+
+const STEPS_X = 80;
+const STEPS_Z = 160;
+const BASE_WIDTH = 16;
+
 function getLogNormalDensity(x: number, currentPrice: number, volatility: number, tYears: number): number {
   if (x <= 0) return 0;
   if (tYears === 0) return x === currentPrice ? 1 : 0;
@@ -24,9 +32,63 @@ function getLogNormalDensity(x: number, currentPrice: number, volatility: number
   return coeff * Math.exp(exponent);
 }
 
+function computeTargetPositions(
+  data: ConeRenderData,
+  horizonDays: number,
+): Float32Array {
+  const positions = new Float32Array(STEPS_X * STEPS_Z * 3);
+
+  const spreadScale = Math.max(MIN_SCALE, Math.min(1.0, data.spreadPct / REF_SPREAD));
+  const scaledWidth = BASE_WIDTH * spreadScale;
+
+  const minPrice = data.minPrice;
+  const maxPrice = data.maxPrice;
+  const priceRange = maxPrice - minPrice;
+
+  const refI = Math.max(1, Math.floor(STEPS_X * 0.15));
+  const tYearsRef = (refI / (STEPS_X - 1)) * (horizonDays / 365);
+  const refDensity = getLogNormalDensity(data.currentPrice, data.currentPrice, data.volatility, tYearsRef);
+
+  for (let i = 0; i < STEPS_X; i++) {
+    const tYears = (i / (STEPS_X - 1)) * (horizonDays / 365);
+    const xPos = (i / (STEPS_X - 1)) * BASE_WIDTH - BASE_WIDTH / 2;
+
+    for (let j = 0; j < STEPS_Z; j++) {
+      const idx = (j * STEPS_X + i) * 3;
+      const price = minPrice + (j / (STEPS_Z - 1)) * priceRange;
+
+      // Y position: scaled by spread so narrow data = narrow cone
+      const yPos = ((j / (STEPS_Z - 1)) - 0.5) * scaledWidth;
+
+      let density = 0;
+      if (i > 0) {
+        density = getLogNormalDensity(price, data.currentPrice, data.volatility, tYears);
+      } else {
+        if (Math.abs(price - data.currentPrice) < priceRange * 0.01) {
+          density = refDensity * 2.0;
+        }
+      }
+
+      const normalized = Math.min(density / refDensity, 2.5);
+      const z = Math.pow(normalized, 0.7) * 3.0;
+
+      positions[idx] = xPos;
+      positions[idx + 1] = yPos;
+      positions[idx + 2] = z;
+    }
+  }
+
+  return positions;
+}
+
 const Surface = ({ data, horizonDays, highlightRange, targetLine, liquidationPrice, takeProfit, stopLoss }: ProbabilityCone3DProps) => {
   const meshRef = useRef<THREE.Mesh>(null);
   const materialRef = useRef<THREE.ShaderMaterial>(null);
+
+  // Animation: store current + target positions
+  const currentPositionsRef = useRef<Float32Array | null>(null);
+  const targetPositionsRef = useRef<Float32Array | null>(null);
+  const animProgressRef = useRef(1.0);
 
   const { geometry, uniforms } = useMemo(() => {
     if (!data) {
@@ -47,42 +109,49 @@ const Surface = ({ data, horizonDays, highlightRange, targetLine, liquidationPri
       };
     }
 
-    const stepsX = 80;
-    const stepsZ = 160;
+    const geom = new THREE.BufferGeometry();
 
-    const geom = new THREE.PlaneGeometry(16, 16, stepsX - 1, stepsZ - 1);
-    const positions = geom.attributes.position.array;
+    const target = computeTargetPositions(data, horizonDays);
+
+    // Initialize current positions (copy of target on first render)
+    if (!currentPositionsRef.current || currentPositionsRef.current.length !== target.length) {
+      currentPositionsRef.current = new Float32Array(target);
+    }
+    targetPositionsRef.current = target;
+    animProgressRef.current = 0;
+
+    // Build geometry from current positions
+    geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(currentPositionsRef.current), 3));
+
+    // Build UV attribute
+    const uvs = new Float32Array(STEPS_X * STEPS_Z * 2);
+    for (let i = 0; i < STEPS_X; i++) {
+      for (let j = 0; j < STEPS_Z; j++) {
+        const idx = (j * STEPS_X + i) * 2;
+        uvs[idx] = i / (STEPS_X - 1);
+        uvs[idx + 1] = j / (STEPS_Z - 1);
+      }
+    }
+    geom.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+
+    // Build index
+    const indices: number[] = [];
+    for (let j = 0; j < STEPS_Z - 1; j++) {
+      for (let i = 0; i < STEPS_X - 1; i++) {
+        const a = j * STEPS_X + i;
+        const b = a + 1;
+        const c = (j + 1) * STEPS_X + i;
+        const d = c + 1;
+        indices.push(a, b, c);
+        indices.push(b, d, c);
+      }
+    }
+    geom.setIndex(indices);
+    geom.computeVertexNormals();
 
     const minPrice = data.minPrice;
     const maxPrice = data.maxPrice;
     const priceRange = maxPrice - minPrice;
-
-    const refI = Math.max(1, Math.floor(stepsX * 0.15));
-    const tYearsRef = (refI / (stepsX - 1)) * (horizonDays / 365);
-    const refDensity = getLogNormalDensity(data.currentPrice, data.currentPrice, data.volatility, tYearsRef);
-
-    for (let i = 0; i < stepsX; i++) {
-      const tYears = (i / (stepsX - 1)) * (horizonDays / 365);
-      for (let j = 0; j < stepsZ; j++) {
-        const idx = (j * stepsX + i) * 3;
-        const price = minPrice + (j / (stepsZ - 1)) * priceRange;
-
-        let density = 0;
-        if (i > 0) {
-          density = getLogNormalDensity(price, data.currentPrice, data.volatility, tYears);
-        } else {
-          if (Math.abs(price - data.currentPrice) < priceRange * 0.01) {
-            density = refDensity * 2.0;
-          }
-        }
-
-        const normalized = Math.min(density / refDensity, 2.5);
-        const z = Math.pow(normalized, 0.7) * 3.0;
-        positions[idx + 2] = z;
-      }
-    }
-
-    geom.computeVertexNormals();
 
     const unifs = {
       uTime: { value: 0 },
@@ -100,9 +169,46 @@ const Surface = ({ data, horizonDays, highlightRange, targetLine, liquidationPri
     return { geometry: geom, uniforms: unifs };
   }, [data, horizonDays, highlightRange, targetLine, liquidationPrice, takeProfit, stopLoss]);
 
-  useFrame((state) => {
+  // When data/horizon changes, recompute target and trigger animation
+  useEffect(() => {
+    if (!data) return;
+    const target = computeTargetPositions(data, horizonDays);
+    targetPositionsRef.current = target;
+
+    // Snapshot current rendered positions as the animation start
+    if (!currentPositionsRef.current || currentPositionsRef.current.length !== target.length) {
+      currentPositionsRef.current = new Float32Array(target);
+      animProgressRef.current = 1.0;
+    } else {
+      animProgressRef.current = 0;
+    }
+  }, [data, horizonDays]);
+
+  useFrame((state, delta) => {
     if (materialRef.current) {
       materialRef.current.uniforms.uTime.value = state.clock.elapsedTime;
+    }
+
+    // Animate vertex positions toward target
+    if (
+      currentPositionsRef.current &&
+      targetPositionsRef.current &&
+      animProgressRef.current < 1.0 &&
+      meshRef.current
+    ) {
+      animProgressRef.current = Math.min(1.0, animProgressRef.current + delta * 2.5);
+      const t = smootherStep(animProgressRef.current);
+      const current = currentPositionsRef.current;
+      const target = targetPositionsRef.current;
+
+      for (let i = 0; i < current.length; i++) {
+        current[i] = current[i] + (target[i] - current[i]) * t;
+      }
+
+      const posAttr = meshRef.current.geometry.getAttribute('position') as THREE.BufferAttribute;
+      posAttr.array.set(current);
+      posAttr.needsUpdate = true;
+      meshRef.current.geometry.computeVertexNormals();
     }
   });
 
@@ -149,13 +255,18 @@ const Surface = ({ data, horizonDays, highlightRange, targetLine, liquidationPri
             float mixStrength = smoothstep(0.0, 3.0, vElevation);
             vec3 color = mix(uColorStart, uColorEnd, mixStrength);
 
+            // Subtle grid with distance-based fade
             float gridX = mod(vUv.x * 80.0, 1.0);
             float gridY = mod(vUv.y * 160.0, 1.0);
+            float distFromCenter = length(vUv - vec2(0.5));
+            float gridFade = 1.0 - smoothstep(0.15, 0.5, distFromCenter);
+            gridFade *= 0.3; // overall grid intensity
 
-            if (gridX < 0.05 || gridY < 0.05) {
-              color += vec3(0.1, 0.3, 0.6) * (1.0 - mixStrength * 0.5);
+            if (gridX < 0.04 || gridY < 0.04) {
+              color += vec3(0.06, 0.15, 0.35) * gridFade * (1.0 - mixStrength * 0.5);
             }
 
+            // Highlight range
             if (uHighlightMin >= 0.0 && uHighlightMax >= 0.0) {
               if (vUv.y >= uHighlightMin && vUv.y <= uHighlightMax) {
                 float pulse = 0.5 + 0.5 * sin(uTime * 2.0 - vUv.x * 5.0);
@@ -163,6 +274,7 @@ const Surface = ({ data, horizonDays, highlightRange, targetLine, liquidationPri
               }
             }
 
+            // Overlays
             if (uTargetLine >= 0.0 && abs(vUv.y - uTargetLine) < 0.003) {
               color = vec3(1.0, 1.0, 1.0);
               color += vec3(0.5, 0.5, 0.5) * (0.5 + 0.5 * sin(uTime * 3.0));
@@ -181,9 +293,14 @@ const Surface = ({ data, horizonDays, highlightRange, targetLine, liquidationPri
               color = vec3(1.0, 0.5, 0.0);
             }
 
-            float alpha = smoothstep(0.0, 0.05, vUv.x) * smoothstep(1.0, 0.8, vUv.x);
-            alpha *= smoothstep(0.0, 0.1, vUv.y) * smoothstep(1.0, 0.9, vUv.y);
-            alpha *= 0.6 + 0.4 * mixStrength;
+            // Edge fade (price axis)
+            float alpha = smoothstep(0.0, 0.1, vUv.y) * smoothstep(1.0, 0.9, vUv.y);
+            // Base fade: gradual fade near time=0 (cone tip)
+            alpha *= smoothstep(0.0, 0.15, vUv.x);
+            // Far edge fade
+            alpha *= smoothstep(1.0, 0.85, vUv.x);
+            // Elevation-based opacity
+            alpha *= 0.5 + 0.5 * mixStrength;
 
             gl_FragColor = vec4(color, alpha);
           }
@@ -196,6 +313,11 @@ const Surface = ({ data, horizonDays, highlightRange, targetLine, liquidationPri
     </mesh>
   );
 };
+
+/** Attempt at a smoother ease-in-out (Ken Perlin's smootherstep). */
+function smootherStep(t: number): number {
+  return t * t * t * (t * (t * 6 - 15) + 10);
+}
 
 export default function ProbabilityCone3D(props: ProbabilityCone3DProps) {
   return (
@@ -213,7 +335,7 @@ export default function ProbabilityCone3D(props: ProbabilityCone3DProps) {
           minPolarAngle={Math.PI / 8}
           maxPolarAngle={Math.PI / 2.1}
           autoRotate={true}
-          autoRotateSpeed={0.3}
+          autoRotateSpeed={0.08}
           enableDamping={true}
           dampingFactor={0.05}
         />

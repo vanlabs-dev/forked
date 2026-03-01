@@ -28,8 +28,9 @@ function deriveConeRenderData(
   const horizonYears = horizon === '1h' ? 1 / (365.25 * 24) : 1 / 365.25;
   const spread = Math.log(finalPoint.p995 / finalPoint.p005);
   const volatility = spread / (5.152 * Math.sqrt(horizonYears));
+  const spreadPct = (finalPoint.p995 - finalPoint.p005) / currentPrice;
 
-  return { minPrice, maxPrice, currentPrice, volatility };
+  return { minPrice, maxPrice, currentPrice, volatility, spreadPct };
 }
 
 function formatPrice(price: number, symbol: string): string {

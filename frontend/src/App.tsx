@@ -418,6 +418,8 @@ export default function App() {
         liquidationPrice={liquidationPriceForCone}
         takeProfit={tpForCone}
         stopLoss={slForCone}
+        horizon={horizon}
+        queryMode={activeTab === 'explorer' ? queryMode : undefined}
       />
 
       {/* UI Overlay */}

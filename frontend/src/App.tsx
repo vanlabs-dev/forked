@@ -48,6 +48,8 @@ function horizonLabel(h: string): string {
   return h === '1h' ? '1 hour' : '24 hours';
 }
 
+type QueryMode = 'above' | 'below' | 'between';
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -66,8 +68,10 @@ export default function App() {
   const horizonDays = horizon === '1h' ? 1 / 24 : 1;
 
   // Explorer state
-  const [rangeMin, setRangeMin] = useState<number>(0);
-  const [rangeMax, setRangeMax] = useState<number>(0);
+  const [queryMode, setQueryMode] = useState<QueryMode>('above');
+  const [targetPrice, setTargetPrice] = useState<number>(0);
+  const [lowerBound, setLowerBound] = useState<number>(0);
+  const [upperBound, setUpperBound] = useState<number>(0);
   const [probResult, setProbResult] = useState<ProbabilityResponse | null>(null);
   const [explorerLoading, setExplorerLoading] = useState(false);
 
@@ -86,6 +90,19 @@ export default function App() {
   );
 
   const supports1h = selectedAsset?.horizons.includes('1h') ?? false;
+  const currentSymbol = selectedAsset?.symbol ?? 'BTC';
+
+  // ── Set explorer defaults for a given price and mode ────────────────
+  function applyExplorerDefaults(price: number, symbol: string, mode: QueryMode) {
+    if (mode === 'above') {
+      setTargetPrice(roundForAsset(price * 1.02, symbol));
+    } else if (mode === 'below') {
+      setTargetPrice(roundForAsset(price * 0.98, symbol));
+    } else {
+      setLowerBound(roundForAsset(price * 0.95, symbol));
+      setUpperBound(roundForAsset(price * 1.05, symbol));
+    }
+  }
 
   // ── Load assets on mount ────────────────────────────────────────────
   useEffect(() => {
@@ -97,12 +114,12 @@ export default function App() {
           setSelectedSymbol(first.symbol);
           if (first.current_price) {
             setEntryPrice(first.current_price);
-            setRangeMin(roundForAsset(first.current_price * 0.9, first.symbol));
-            setRangeMax(roundForAsset(first.current_price * 1.1, first.symbol));
+            applyExplorerDefaults(first.current_price, first.symbol, 'above');
           }
         }
       })
       .catch(() => setError('Cannot connect to Prism API'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Load cone when asset or horizon changes ─────────────────────────
@@ -126,8 +143,7 @@ export default function App() {
     if (!selectedAsset?.current_price) return;
     const price = selectedAsset.current_price;
     setEntryPrice(price);
-    setRangeMin(roundForAsset(price * 0.9, selectedAsset.symbol));
-    setRangeMax(roundForAsset(price * 1.1, selectedAsset.symbol));
+    applyExplorerDefaults(price, selectedAsset.symbol, queryMode);
     setTakeProfit(undefined);
     setStopLoss(undefined);
     setProbResult(null);
@@ -138,12 +154,36 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSymbol]);
 
+  // ── Reset explorer defaults on mode change ──────────────────────────
+  useEffect(() => {
+    if (!selectedAsset?.current_price) return;
+    applyExplorerDefaults(selectedAsset.current_price, selectedAsset.symbol, queryMode);
+    setProbResult(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryMode]);
+
   // ── Debounced probability fetch (Explorer) ──────────────────────────
   useEffect(() => {
-    if (activeTab !== 'explorer' || !selectedSymbol || !rangeMin || !rangeMax || rangeMin >= rangeMax) return;
+    if (activeTab !== 'explorer' || !selectedSymbol) return;
+
+    let lower: number | undefined;
+    let upper: number | undefined;
+
+    if (queryMode === 'above') {
+      if (!targetPrice || targetPrice <= 0) return;
+      lower = targetPrice;
+    } else if (queryMode === 'below') {
+      if (!targetPrice || targetPrice <= 0) return;
+      upper = targetPrice;
+    } else {
+      if (!lowerBound || !upperBound || lowerBound <= 0 || upperBound <= 0 || lowerBound >= upperBound) return;
+      lower = lowerBound;
+      upper = upperBound;
+    }
+
     const timer = setTimeout(() => {
       setExplorerLoading(true);
-      fetchProbability(selectedSymbol, rangeMin, rangeMax, horizon)
+      fetchProbability(selectedSymbol, lower, upper, horizon)
         .then((result) => {
           setProbResult(result);
           if (result.cone) {
@@ -154,7 +194,7 @@ export default function App() {
         .catch(() => setExplorerLoading(false));
     }, 500);
     return () => clearTimeout(timer);
-  }, [selectedSymbol, rangeMin, rangeMax, horizon, activeTab]);
+  }, [selectedSymbol, queryMode, targetPrice, lowerBound, upperBound, horizon, activeTab]);
 
   // ── Debounced position risk fetch (Scanner) ─────────────────────────
   useEffect(() => {
@@ -185,9 +225,9 @@ export default function App() {
   }, [selectedSymbol, entryPrice, leverage, isLong, takeProfit, stopLoss, horizon, activeTab]);
 
   // ── Derived display values ──────────────────────────────────────────
-  const probInRange = probResult?.probability ?? 0;
-  const probBelow = probResult?.probability_below_lower ?? 0;
-  const probAbove = probResult?.probability_above_upper ?? 0;
+  const displayProb = probResult?.probability ?? 0;
+  const probBelowLower = probResult?.probability_below_lower ?? 0;
+  const probAboveUpper = probResult?.probability_above_upper ?? 0;
 
   const liqProb = riskResult?.liquidation.probability ?? 0;
   const liqPrice = riskResult?.liquidation.price ?? 0;
@@ -195,14 +235,30 @@ export default function App() {
   const probTP = riskResult?.take_profit?.probability ?? 0;
   const probSL = riskResult?.stop_loss?.probability ?? 0;
 
-  const highlightRange: [number, number] | undefined =
-    activeTab === 'explorer' && rangeMin > 0 && rangeMax > 0 ? [rangeMin, rangeMax] : undefined;
+  // ── Cone overlay props ──────────────────────────────────────────────
+  let coneHighlightRange: [number, number] | undefined;
+  let coneTargetLine: number | undefined;
+
+  if (activeTab === 'explorer') {
+    if (queryMode === 'above' && targetPrice > 0) {
+      coneHighlightRange = [targetPrice, (coneRenderData?.maxPrice ?? targetPrice * 2)];
+      coneTargetLine = targetPrice;
+    } else if (queryMode === 'below' && targetPrice > 0) {
+      coneHighlightRange = [(coneRenderData?.minPrice ?? 0), targetPrice];
+      coneTargetLine = targetPrice;
+    } else if (queryMode === 'between' && lowerBound > 0 && upperBound > 0) {
+      coneHighlightRange = [lowerBound, upperBound];
+    }
+  }
 
   const liquidationPriceForCone = activeTab === 'scanner' ? riskResult?.liquidation.price : undefined;
   const tpForCone = activeTab === 'scanner' ? riskResult?.take_profit?.price : undefined;
   const slForCone = activeTab === 'scanner' ? riskResult?.stop_loss?.price : undefined;
 
-  const currentSymbol = selectedAsset?.symbol ?? 'BTC';
+  // ── Price input blur handler ────────────────────────────────────────
+  function roundOnBlur(value: number, setter: (v: number) => void) {
+    if (value > 0) setter(roundForAsset(value, currentSymbol));
+  }
 
   // ── Error overlay ───────────────────────────────────────────────────
   if (error && assets.length === 0) {
@@ -223,13 +279,141 @@ export default function App() {
     );
   }
 
+  // ── Explorer output panel ───────────────────────────────────────────
+  function renderExplorerOutput() {
+    if (queryMode === 'between') {
+      return (
+        <motion.div
+          key="explorer-between"
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: 20 }}
+          transition={{ duration: 0.3 }}
+          className="bg-black/40 backdrop-blur-xl p-8 rounded-3xl border border-white/10 shadow-2xl"
+        >
+          <div className="text-center mb-8 relative">
+            {explorerLoading && (
+              <div className="absolute -top-2 right-0">
+                <Loader2 className="w-4 h-4 text-white/40 animate-spin" />
+              </div>
+            )}
+            <div className="text-[10px] font-medium text-white/50 uppercase tracking-widest mb-2">Probability in Range</div>
+            <div className="text-7xl font-light text-white tracking-tighter">
+              {(displayProb * 100).toFixed(1)}<span className="text-4xl text-white/40">%</span>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <div className="flex items-center gap-1 h-1.5 rounded-full overflow-hidden bg-white/5">
+              <div style={{ width: `${probBelowLower * 100}%` }} className="h-full bg-white/20" />
+              <div style={{ width: `${displayProb * 100}%` }} className="h-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]" />
+              <div style={{ width: `${probAboveUpper * 100}%` }} className="h-full bg-white/20" />
+            </div>
+
+            <div className="flex justify-between text-xs font-mono">
+              <div className="flex flex-col">
+                <span className="text-white/40 uppercase text-[10px] tracking-widest mb-1">Below</span>
+                <span className="text-white/80">{(probBelowLower * 100).toFixed(1)}%</span>
+              </div>
+              <div className="flex flex-col text-right">
+                <span className="text-white/40 uppercase text-[10px] tracking-widest mb-1">Above</span>
+                <span className="text-white/80">{(probAboveUpper * 100).toFixed(1)}%</span>
+              </div>
+            </div>
+
+            {probResult && (
+              <div className="pt-6 border-t border-white/10">
+                <div className="flex items-start gap-3">
+                  <Info className="w-4 h-4 text-white/40 shrink-0 mt-0.5" />
+                  <p className="text-xs text-white/60 leading-relaxed">
+                    The model indicates a <span className="text-white font-medium">{(displayProb * 100).toFixed(1)}%</span> probability
+                    that {selectedAsset?.name} will land between ${formatPrice(lowerBound, currentSymbol)} and
+                    ${formatPrice(upperBound, currentSymbol)} within {horizonLabel(horizon)}.
+                    <span className="ml-1 text-white/40">(Confidence: {probResult.confidence})</span>
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </motion.div>
+      );
+    }
+
+    // Above or Below mode
+    const isAbove = queryMode === 'above';
+    const complement = 1 - displayProb;
+
+    return (
+      <motion.div
+        key={`explorer-${queryMode}`}
+        initial={{ opacity: 0, x: 20 }}
+        animate={{ opacity: 1, x: 0 }}
+        exit={{ opacity: 0, x: 20 }}
+        transition={{ duration: 0.3 }}
+        className="bg-black/40 backdrop-blur-xl p-8 rounded-3xl border border-white/10 shadow-2xl"
+      >
+        <div className="text-center mb-8 relative">
+          {explorerLoading && (
+            <div className="absolute -top-2 right-0">
+              <Loader2 className="w-4 h-4 text-white/40 animate-spin" />
+            </div>
+          )}
+          <div className="text-[10px] font-medium text-white/50 uppercase tracking-widest mb-2">
+            Probability {isAbove ? 'Above' : 'Below'}
+          </div>
+          <div className="text-7xl font-light text-white tracking-tighter">
+            {(displayProb * 100).toFixed(1)}<span className="text-4xl text-white/40">%</span>
+          </div>
+        </div>
+
+        <div className="space-y-6">
+          <div className="flex items-center gap-1 h-1.5 rounded-full overflow-hidden bg-white/5">
+            <div
+              style={{ width: `${(isAbove ? complement : displayProb) * 100}%` }}
+              className={`h-full ${isAbove ? 'bg-white/20' : 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]'}`}
+            />
+            <div
+              style={{ width: `${(isAbove ? displayProb : complement) * 100}%` }}
+              className={`h-full ${isAbove ? 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-white/20'}`}
+            />
+          </div>
+
+          <div className="flex justify-between text-xs font-mono">
+            <div className="flex flex-col">
+              <span className="text-white/40 uppercase text-[10px] tracking-widest mb-1">Below</span>
+              <span className="text-white/80">{((isAbove ? complement : displayProb) * 100).toFixed(1)}%</span>
+            </div>
+            <div className="flex flex-col text-right">
+              <span className="text-white/40 uppercase text-[10px] tracking-widest mb-1">Above</span>
+              <span className="text-white/80">{((isAbove ? displayProb : complement) * 100).toFixed(1)}%</span>
+            </div>
+          </div>
+
+          {probResult && (
+            <div className="pt-6 border-t border-white/10">
+              <div className="flex items-start gap-3">
+                <Info className="w-4 h-4 text-white/40 shrink-0 mt-0.5" />
+                <p className="text-xs text-white/60 leading-relaxed">
+                  The model indicates a <span className="text-white font-medium">{(displayProb * 100).toFixed(1)}%</span> probability
+                  that {selectedAsset?.name} will {isAbove ? 'go above' : 'drop below'} ${formatPrice(targetPrice, currentSymbol)} within {horizonLabel(horizon)}.
+                  <span className="ml-1 text-white/40">(Confidence: {probResult.confidence})</span>
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      </motion.div>
+    );
+  }
+
   return (
     <div className="relative min-h-screen bg-black text-white font-sans overflow-hidden selection:bg-white/20">
       {/* 3D Background */}
       <ProbabilityCone3D
         data={coneRenderData}
         horizonDays={horizonDays}
-        highlightRange={highlightRange}
+        highlightRange={coneHighlightRange}
+        targetLine={coneTargetLine}
         liquidationPrice={liquidationPriceForCone}
         takeProfit={tpForCone}
         stopLoss={slForCone}
@@ -300,38 +484,72 @@ export default function App() {
                 transition={{ duration: 0.3 }}
                 className="bg-black/40 backdrop-blur-xl p-6 rounded-3xl border border-white/10 shadow-2xl"
               >
-                <div className="flex items-center gap-3 mb-6">
+                <div className="flex items-center gap-3 mb-5">
                   <div className="p-2 bg-white/10 rounded-lg">
                     <Crosshair className="w-4 h-4 text-white" />
                   </div>
-                  <h2 className="text-sm font-medium uppercase tracking-widest text-white/80">Target Range</h2>
+                  <h2 className="text-sm font-medium uppercase tracking-widest text-white/80">Price Query</h2>
                 </div>
 
+                {/* Mode Toggle */}
+                <div className="flex bg-white/5 p-1 rounded-xl border border-white/10 mb-5">
+                  {(['above', 'below', 'between'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => setQueryMode(mode)}
+                      className={`flex-1 py-2 rounded-lg text-xs font-medium uppercase tracking-wider transition-all ${queryMode === mode ? 'bg-white text-black shadow-sm' : 'text-white/50 hover:text-white'}`}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Inputs based on mode */}
                 <div className="space-y-5">
-                  <div>
-                    <label className="block text-[10px] uppercase tracking-widest text-white/40 mb-2">Upper Bound</label>
-                    <div className="relative">
-                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40 font-mono text-sm">$</span>
-                      <input
-                        type="number"
-                        value={rangeMax || ''}
-                        onChange={(e) => setRangeMax(Number(e.target.value))}
-                        className="w-full bg-white/5 border border-white/10 text-white text-sm rounded-xl pl-8 pr-4 py-3 focus:outline-none focus:ring-1 focus:ring-white/30 font-mono transition-all"
-                      />
+                  {queryMode === 'between' ? (
+                    <>
+                      <div>
+                        <label className="block text-[10px] uppercase tracking-widest text-white/40 mb-2">Upper Bound</label>
+                        <div className="relative">
+                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40 font-mono text-sm">$</span>
+                          <input
+                            type="number"
+                            value={upperBound || ''}
+                            onChange={(e) => setUpperBound(Number(e.target.value))}
+                            onBlur={() => roundOnBlur(upperBound, setUpperBound)}
+                            className="w-full bg-white/5 border border-white/10 text-white text-sm rounded-xl pl-8 pr-4 py-3 focus:outline-none focus:ring-1 focus:ring-white/30 font-mono transition-all"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] uppercase tracking-widest text-white/40 mb-2">Lower Bound</label>
+                        <div className="relative">
+                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40 font-mono text-sm">$</span>
+                          <input
+                            type="number"
+                            value={lowerBound || ''}
+                            onChange={(e) => setLowerBound(Number(e.target.value))}
+                            onBlur={() => roundOnBlur(lowerBound, setLowerBound)}
+                            className="w-full bg-white/5 border border-white/10 text-white text-sm rounded-xl pl-8 pr-4 py-3 focus:outline-none focus:ring-1 focus:ring-white/30 font-mono transition-all"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div>
+                      <label className="block text-[10px] uppercase tracking-widest text-white/40 mb-2">Target Price</label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40 font-mono text-sm">$</span>
+                        <input
+                          type="number"
+                          value={targetPrice || ''}
+                          onChange={(e) => setTargetPrice(Number(e.target.value))}
+                          onBlur={() => roundOnBlur(targetPrice, setTargetPrice)}
+                          className="w-full bg-white/5 border border-white/10 text-white text-sm rounded-xl pl-8 pr-4 py-3 focus:outline-none focus:ring-1 focus:ring-white/30 font-mono transition-all"
+                        />
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] uppercase tracking-widest text-white/40 mb-2">Lower Bound</label>
-                    <div className="relative">
-                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40 font-mono text-sm">$</span>
-                      <input
-                        type="number"
-                        value={rangeMin || ''}
-                        onChange={(e) => setRangeMin(Number(e.target.value))}
-                        className="w-full bg-white/5 border border-white/10 text-white text-sm rounded-xl pl-8 pr-4 py-3 focus:outline-none focus:ring-1 focus:ring-white/30 font-mono transition-all"
-                      />
-                    </div>
-                  </div>
+                  )}
                 </div>
               </motion.div>
             ) : (
@@ -431,59 +649,7 @@ export default function App() {
         <div className="absolute top-1/2 -translate-y-1/2 right-8 pointer-events-auto w-96">
           <AnimatePresence mode="wait">
             {activeTab === 'explorer' ? (
-              <motion.div
-                key="explorer-outputs"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-                transition={{ duration: 0.3 }}
-                className="bg-black/40 backdrop-blur-xl p-8 rounded-3xl border border-white/10 shadow-2xl"
-              >
-                <div className="text-center mb-8 relative">
-                  {explorerLoading && (
-                    <div className="absolute -top-2 right-0">
-                      <Loader2 className="w-4 h-4 text-white/40 animate-spin" />
-                    </div>
-                  )}
-                  <div className="text-[10px] font-medium text-white/50 uppercase tracking-widest mb-2">Probability in Range</div>
-                  <div className="text-7xl font-light text-white tracking-tighter">
-                    {(probInRange * 100).toFixed(1)}<span className="text-4xl text-white/40">%</span>
-                  </div>
-                </div>
-
-                <div className="space-y-6">
-                  <div className="flex items-center gap-1 h-1.5 rounded-full overflow-hidden bg-white/5">
-                    <div style={{ width: `${probBelow * 100}%` }} className="h-full bg-white/20" />
-                    <div style={{ width: `${probInRange * 100}%` }} className="h-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]" />
-                    <div style={{ width: `${probAbove * 100}%` }} className="h-full bg-white/20" />
-                  </div>
-
-                  <div className="flex justify-between text-xs font-mono">
-                    <div className="flex flex-col">
-                      <span className="text-white/40 uppercase text-[10px] tracking-widest mb-1">Below</span>
-                      <span className="text-white/80">{(probBelow * 100).toFixed(1)}%</span>
-                    </div>
-                    <div className="flex flex-col text-right">
-                      <span className="text-white/40 uppercase text-[10px] tracking-widest mb-1">Above</span>
-                      <span className="text-white/80">{(probAbove * 100).toFixed(1)}%</span>
-                    </div>
-                  </div>
-
-                  {probResult && (
-                    <div className="pt-6 border-t border-white/10">
-                      <div className="flex items-start gap-3">
-                        <Info className="w-4 h-4 text-white/40 shrink-0 mt-0.5" />
-                        <p className="text-xs text-white/60 leading-relaxed">
-                          The model indicates a <span className="text-white font-medium">{(probInRange * 100).toFixed(1)}%</span> probability
-                          that {selectedAsset?.name} will land between ${formatPrice(rangeMin, currentSymbol)} and
-                          ${formatPrice(rangeMax, currentSymbol)} within {horizonLabel(horizon)}.
-                          <span className="ml-1 text-white/40">(Confidence: {probResult.confidence})</span>
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </motion.div>
+              renderExplorerOutput()
             ) : (
               <motion.div
                 key="scanner-outputs"

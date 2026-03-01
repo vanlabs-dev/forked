@@ -8,6 +8,7 @@ interface ProbabilityCone3DProps {
   data: ConeRenderData | null;
   horizonDays: number;
   highlightRange?: [number, number];
+  targetLine?: number;
   liquidationPrice?: number;
   takeProfit?: number;
   stopLoss?: number;
@@ -23,7 +24,7 @@ function getLogNormalDensity(x: number, currentPrice: number, volatility: number
   return coeff * Math.exp(exponent);
 }
 
-const Surface = ({ data, horizonDays, highlightRange, liquidationPrice, takeProfit, stopLoss }: ProbabilityCone3DProps) => {
+const Surface = ({ data, horizonDays, highlightRange, targetLine, liquidationPrice, takeProfit, stopLoss }: ProbabilityCone3DProps) => {
   const meshRef = useRef<THREE.Mesh>(null);
   const materialRef = useRef<THREE.ShaderMaterial>(null);
 
@@ -38,6 +39,7 @@ const Surface = ({ data, horizonDays, highlightRange, liquidationPrice, takeProf
           uHighlightMin: { value: -1 },
           uHighlightMax: { value: -1 },
           uHighlightColor: { value: new THREE.Color('#ffffff') },
+          uTargetLine: { value: -1 },
           uLiquidation: { value: -1 },
           uTakeProfit: { value: -1 },
           uStopLoss: { value: -1 },
@@ -89,13 +91,14 @@ const Surface = ({ data, horizonDays, highlightRange, liquidationPrice, takeProf
       uHighlightMin: { value: highlightRange ? (highlightRange[0] - minPrice) / priceRange : -1 },
       uHighlightMax: { value: highlightRange ? (highlightRange[1] - minPrice) / priceRange : -1 },
       uHighlightColor: { value: new THREE.Color('#ffffff') },
+      uTargetLine: { value: targetLine != null ? (targetLine - minPrice) / priceRange : -1 },
       uLiquidation: { value: liquidationPrice != null ? (liquidationPrice - minPrice) / priceRange : -1 },
       uTakeProfit: { value: takeProfit != null ? (takeProfit - minPrice) / priceRange : -1 },
       uStopLoss: { value: stopLoss != null ? (stopLoss - minPrice) / priceRange : -1 },
     };
 
     return { geometry: geom, uniforms: unifs };
-  }, [data, horizonDays, highlightRange, liquidationPrice, takeProfit, stopLoss]);
+  }, [data, horizonDays, highlightRange, targetLine, liquidationPrice, takeProfit, stopLoss]);
 
   useFrame((state) => {
     if (materialRef.current) {
@@ -133,6 +136,7 @@ const Surface = ({ data, horizonDays, highlightRange, liquidationPrice, takeProf
           uniform float uHighlightMin;
           uniform float uHighlightMax;
           uniform vec3 uHighlightColor;
+          uniform float uTargetLine;
           uniform float uLiquidation;
           uniform float uTakeProfit;
           uniform float uStopLoss;
@@ -157,6 +161,11 @@ const Surface = ({ data, horizonDays, highlightRange, liquidationPrice, takeProf
                 float pulse = 0.5 + 0.5 * sin(uTime * 2.0 - vUv.x * 5.0);
                 color = mix(color, uHighlightColor, 0.2 + 0.15 * pulse);
               }
+            }
+
+            if (uTargetLine >= 0.0 && abs(vUv.y - uTargetLine) < 0.003) {
+              color = vec3(1.0, 1.0, 1.0);
+              color += vec3(0.5, 0.5, 0.5) * (0.5 + 0.5 * sin(uTime * 3.0));
             }
 
             if (uLiquidation >= 0.0 && abs(vUv.y - uLiquidation) < 0.003) {

@@ -39,13 +39,16 @@ export async function fetchCone(asset: string, horizon: string = '24h'): Promise
 
 export async function fetchProbability(
   asset: string,
-  lower: number,
-  upper: number,
+  lower: number | undefined,
+  upper: number | undefined,
   horizon: string = '24h',
 ): Promise<ProbabilityResponse> {
+  const body: Record<string, unknown> = { asset, horizon };
+  if (lower != null) body.lower = lower;
+  if (upper != null) body.upper = upper;
   return request<ProbabilityResponse>('/api/probability', {
     method: 'POST',
-    body: JSON.stringify({ asset, lower, upper, horizon }),
+    body: JSON.stringify(body),
   });
 }
 

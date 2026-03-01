@@ -16,7 +16,7 @@ console = Console()
 def main() -> None:
     client = SynthClient()
 
-    console.print("\n[bold]Forked — Synth API Verification[/bold]\n")
+    console.print("\n[bold]Prism — Synth API Verification[/bold]\n")
 
     try:
         data = client.get_prediction_percentiles("BTC", "24h")

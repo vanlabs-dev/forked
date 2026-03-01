@@ -28,6 +28,7 @@ export interface ConeResponse {
 
 export interface ProbabilityResponse {
   asset: string;
+  target_price?: number;
   lower?: number;
   upper?: number;
   current_price: number;

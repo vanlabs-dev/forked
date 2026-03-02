@@ -1,3 +1,9 @@
+# API BUDGET: 15,000 calls remaining as of Mar 3
+# AlphaLog: 12 calls/hour = 288/day = ~3,744 by March 16 (13 days)
+# Frontend cache (15min TTL): ~4 calls per user session
+# Estimated total: ~5,000 for AlphaLog + ~2,000 for frontend testing = ~7,000
+# Buffer: ~8,000 calls remaining for demo day usage
+
 """FastAPI server for Prism probability and position risk endpoints."""
 
 from __future__ import annotations
@@ -42,12 +48,46 @@ VALID_HORIZONS: set[str] = {"1h", "24h"}
 # ── Caching Synth client wrapper ─────────────────────────────────────
 
 class _CachingSynthClient:
-    """Wraps SynthClient with in-memory TTL cache for percentile data."""
+    """Wraps SynthClient with in-memory TTL cache and API call counting."""
 
-    def __init__(self, client: SynthClient, ttl: int = 300) -> None:
+    _HOURLY_WARN_THRESHOLD = 50
+
+    def __init__(self, client: SynthClient, ttl: int = 900) -> None:
         self._client = client
         self._ttl = ttl
         self._cache: dict[str, tuple[float, Any]] = {}
+        self._call_count: int = 0
+        self._call_timestamps: list[float] = []
+        self._start_time: float = time.monotonic()
+        logger.info("API budget: ~15,000 calls remaining (estimated as of Mar 3)")
+
+    def _record_call(self) -> None:
+        """Record an API call and warn if rate is too high."""
+        now = time.monotonic()
+        self._call_count += 1
+        self._call_timestamps.append(now)
+
+        # Count calls in the last hour
+        one_hour_ago = now - 3600
+        self._call_timestamps = [
+            t for t in self._call_timestamps if t > one_hour_ago
+        ]
+        calls_last_hour = len(self._call_timestamps)
+
+        if calls_last_hour > self._HOURLY_WARN_THRESHOLD:
+            logger.warning(
+                "API rate HIGH: %d calls in the last hour (threshold: %d). "
+                "Total this session: %d",
+                calls_last_hour,
+                self._HOURLY_WARN_THRESHOLD,
+                self._call_count,
+            )
+        elif self._call_count % 10 == 0:
+            logger.info(
+                "API calls this session: %d (last hour: %d)",
+                self._call_count,
+                calls_last_hour,
+            )
 
     def get_prediction_percentiles(
         self, asset: str = "BTC", horizon: str = "24h", **kwargs: Any,
@@ -63,6 +103,7 @@ class _CachingSynthClient:
             asset=asset, horizon=horizon, **kwargs,
         )
         self._cache[key] = (now, data)
+        self._record_call()
         return data
 
     def __getattr__(self, name: str) -> Any:
@@ -147,7 +188,7 @@ def _init_engine() -> ProbabilityEngine:
     global _engine
     if _engine is None:
         raw_client = SynthClient(SYNTH_API_KEY)
-        caching_client = _CachingSynthClient(raw_client, ttl=300)
+        caching_client = _CachingSynthClient(raw_client, ttl=900)
         _engine = ProbabilityEngine(caching_client)  # type: ignore[arg-type]
     return _engine
 

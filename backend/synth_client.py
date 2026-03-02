@@ -1,3 +1,5 @@
+import logging
+import time
 from typing import Any
 
 import httpx
@@ -9,6 +11,8 @@ from backend.config import (
     SYNTH_API_KEY,
     SYNTH_BASE_URL,
 )
+
+logger = logging.getLogger("synth.client")
 
 
 class SynthAPIError(Exception):
@@ -27,6 +31,8 @@ class SynthClient:
     Uses httpx for HTTP with automatic retries on transient failures.
     """
 
+    _HOURLY_WARN_THRESHOLD = 50
+
     def __init__(
         self,
         api_key: str = SYNTH_API_KEY,
@@ -41,9 +47,11 @@ class SynthClient:
             "Authorization": f"Apikey {api_key}",
             "Accept": "application/json",
         }
+        self._call_count: int = 0
+        self._call_timestamps: list[float] = []
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        """Execute a GET request with auth headers and error handling."""
+        """Execute a GET request with auth headers, error handling, and call counting."""
         url = f"{self._base_url}{path}"
         with httpx.Client(transport=self._transport, timeout=self._timeout) as client:
             response = client.get(url, headers=self._headers, params=params)
@@ -51,7 +59,36 @@ class SynthClient:
         if response.status_code != 200:
             raise SynthAPIError(response.status_code, response.text)
 
+        self._record_call(path)
         return response.json()
+
+    def _record_call(self, path: str) -> None:
+        """Record an API call and warn if rate is too high."""
+        now = time.monotonic()
+        self._call_count += 1
+        self._call_timestamps.append(now)
+
+        # Prune timestamps older than 1 hour
+        one_hour_ago = now - 3600
+        self._call_timestamps = [
+            t for t in self._call_timestamps if t > one_hour_ago
+        ]
+        calls_last_hour = len(self._call_timestamps)
+
+        if calls_last_hour > self._HOURLY_WARN_THRESHOLD:
+            logger.warning(
+                "API rate HIGH: %d calls/hour (threshold: %d). Total session: %d. Last: %s",
+                calls_last_hour,
+                self._HOURLY_WARN_THRESHOLD,
+                self._call_count,
+                path,
+            )
+        elif self._call_count % 10 == 0:
+            logger.info(
+                "Synth API calls — session: %d, last hour: %d",
+                self._call_count,
+                calls_last_hour,
+            )
 
     # ── Insight Endpoints ──────────────────────────────────────────────
 

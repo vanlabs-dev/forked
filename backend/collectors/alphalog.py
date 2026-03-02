@@ -1,8 +1,19 @@
+# API BUDGET: 15,000 calls remaining as of Mar 3
+# AlphaLog: 12 calls/hour = 288/day = ~3,744 by March 16 (13 days)
+# Frontend cache (15min TTL): ~4 calls per user session
+# Estimated total: ~5,000 for AlphaLog + ~2,000 for frontend testing = ~7,000
+# Buffer: ~8,000 calls remaining for demo day usage
+
 """AlphaLog — Continuous Synth API data collector.
 
-Records prediction percentiles, Polymarket odds, and volatility data
-every hour for all supported assets. Builds a historical dataset of
-Synth predictions vs actual outcomes.
+Records prediction percentiles every hour for all supported assets.
+Builds a historical dataset of Synth predictions vs actual outcomes.
+
+Call budget (per hour):
+  Crypto (BTC, ETH, SOL): 2 calls each (1h + 24h) = 6
+  XAU: 1 call (24h only) = 1
+  Equities (SPY, NVDA, GOOGL, TSLA, AAPL): 1 call each (24h only) = 5
+  Total: 12 calls/hour = 288/day
 """
 
 from __future__ import annotations
@@ -16,11 +27,7 @@ from typing import Any
 
 from backend.config import (
     ASSETS,
-    OPTION_PRICING_ASSETS,
     PERCENTILES_1H_ASSETS,
-    POLYMARKET_DAILY_ASSETS,
-    POLYMARKET_RANGE_ASSETS,
-    POLYMARKET_SHORT_TERM_ASSETS,
     SUPABASE_KEY,
     SUPABASE_URL,
 )
@@ -88,18 +95,15 @@ class AlphaLogCollector:
             logger.warning("  %s %s failed: %s", kwargs.get("asset", "?"), key, exc)
 
     def _collect_asset(self, asset: str) -> dict[str, Any]:
-        """Collect all supported endpoint data for a single asset."""
+        """Collect percentile data for a single asset.
+
+        Only fetches prediction-percentiles (the only endpoint Prism needs).
+        24h for all assets, 1h for crypto + XAU only.
+        """
         result: dict[str, Any] = {
             "current_price": None,
             "percentiles_24h": {},
             "percentiles_1h": {},
-            "polymarket_daily": {},
-            "polymarket_hourly": {},
-            "polymarket_15min": {},
-            "polymarket_range": {},
-            "option_pricing_24h": {},
-            "lp_probabilities_24h": {},
-            "volatility_24h": {},
             "errors": [],
         }
 
@@ -117,56 +121,6 @@ class AlphaLogCollector:
             )
         else:
             logger.debug("  %s: skipping percentiles_1h (unsupported)", asset)
-
-        # Polymarket daily up/down
-        if asset in POLYMARKET_DAILY_ASSETS:
-            self._fetch_endpoint(
-                result, "polymarket_daily", "get_polymarket_updown_daily", asset=asset,
-            )
-        else:
-            logger.debug("  %s: skipping polymarket_daily (unsupported)", asset)
-
-        # Polymarket hourly up/down — crypto only
-        if asset in POLYMARKET_SHORT_TERM_ASSETS:
-            self._fetch_endpoint(
-                result, "polymarket_hourly", "get_polymarket_updown_hourly", asset=asset,
-            )
-        else:
-            logger.debug("  %s: skipping polymarket_hourly (unsupported)", asset)
-
-        # Polymarket 15min up/down — crypto only
-        if asset in POLYMARKET_SHORT_TERM_ASSETS:
-            self._fetch_endpoint(
-                result, "polymarket_15min", "get_polymarket_updown_15min", asset=asset,
-            )
-        else:
-            logger.debug("  %s: skipping polymarket_15min (unsupported)", asset)
-
-        # Polymarket range
-        if asset in POLYMARKET_RANGE_ASSETS:
-            self._fetch_endpoint(
-                result, "polymarket_range", "get_polymarket_range", asset=asset,
-            )
-        else:
-            logger.debug("  %s: skipping polymarket_range (unsupported)", asset)
-
-        # Option pricing 24h
-        if asset in OPTION_PRICING_ASSETS:
-            self._fetch_endpoint(
-                result, "option_pricing_24h", "get_option_pricing", asset=asset, horizon="24h",
-            )
-        else:
-            logger.debug("  %s: skipping option_pricing_24h (unsupported)", asset)
-
-        # LP probabilities 24h — all assets
-        self._fetch_endpoint(
-            result, "lp_probabilities_24h", "get_lp_probabilities", asset=asset, horizon="24h",
-        )
-
-        # Volatility 24h — all assets
-        self._fetch_endpoint(
-            result, "volatility_24h", "get_volatility", asset=asset, horizon="24h",
-        )
 
         return result
 

@@ -324,12 +324,15 @@ export default function ProbabilityCone3D(props: ProbabilityCone3DProps) {
         <OrbitControls
           enableZoom={true}
           enablePan={false}
-          minPolarAngle={Math.PI / 8}
-          maxPolarAngle={Math.PI / 2.1}
-          autoRotate={true}
-          autoRotateSpeed={0.08}
+          /* Vertical: lock to ±15° around default (~70.5° polar) */
+          minPolarAngle={Math.PI * 0.3}
+          maxPolarAngle={Math.PI * 0.47}
+          /* Horizontal: ±35° around default (π/4 ≈ 0.785 rad) */
+          minAzimuthAngle={-Math.PI / 12}
+          maxAzimuthAngle={Math.PI / 2.4}
+          autoRotate={false}
           enableDamping={true}
-          dampingFactor={0.05}
+          dampingFactor={0.08}
         />
       </Canvas>
     </div>

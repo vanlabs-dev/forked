@@ -3,22 +3,22 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "forked"
+name = "prism"
 version = "0.1.0"
-description = "Prediction markets intelligence tool leveraging Synth probabilistic forecasts"
+description = "Personal risk intelligence tool powered by Synth probability forecasts"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
-    "requests>=2.31.0",
     "httpx>=0.27.0",
     "pandas>=2.2.0",
     "numpy>=1.26.0",
     "scipy>=1.12.0",
     "python-dotenv>=1.0.0",
     "supabase>=2.0.0",
-    "schedule>=1.2.0",
     "rich>=13.7.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
 ]
 
 [project.optional-dependencies]

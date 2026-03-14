@@ -61,16 +61,23 @@ export async function fetchPositionRisk(
   stop_loss?: number,
   horizon: string = '24h',
 ): Promise<PositionRiskResponse> {
+  // Treat 0 as "not set" — a $0 TP/SL is nonsensical
+  const tp = take_profit && take_profit > 0 ? take_profit : null;
+  const sl = stop_loss && stop_loss > 0 ? stop_loss : null;
+
+  const body = {
+    asset,
+    entry_price,
+    leverage,
+    direction,
+    take_profit: tp,
+    stop_loss: sl,
+    horizon,
+  };
+  console.log('[Prism] POST /api/position-risk', body);
+
   return request<PositionRiskResponse>('/api/position-risk', {
     method: 'POST',
-    body: JSON.stringify({
-      asset,
-      entry_price,
-      leverage,
-      direction,
-      take_profit: take_profit ?? null,
-      stop_loss: stop_loss ?? null,
-      horizon,
-    }),
+    body: JSON.stringify(body),
   });
 }

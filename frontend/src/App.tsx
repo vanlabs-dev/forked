@@ -601,7 +601,7 @@ export default function App() {
                         <input
                           type="number"
                           value={entryPrice || ''}
-                          onChange={(e) => setEntryPrice(Number(e.target.value))}
+                          onChange={(e) => setEntryPrice(e.target.value ? Number(e.target.value) : 0)}
                           className="w-full bg-white/5 border border-white/10 text-white text-sm rounded-xl pl-6 pr-2 py-2.5 focus:outline-none focus:ring-1 focus:ring-white/30 font-mono"
                         />
                       </div>
@@ -612,7 +612,7 @@ export default function App() {
                         <input
                           type="number"
                           value={leverage || ''}
-                          onChange={(e) => setLeverage(Number(e.target.value))}
+                          onChange={(e) => setLeverage(e.target.value ? Number(e.target.value) : 0)}
                           className="w-full bg-white/5 border border-white/10 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-white/30 font-mono"
                         />
                         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 font-mono text-xs">x</span>

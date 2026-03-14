@@ -81,7 +81,7 @@ export default function App() {
 
   // Scanner state
   const [entryPrice, setEntryPrice] = useState<number>(0);
-  const [leverage, setLeverage] = useState<number>(10);
+  const [leverage, setLeverage] = useState<number>(20);
   const [isLong, setIsLong] = useState(true);
   const [takeProfit, setTakeProfit] = useState<number | undefined>(undefined);
   const [stopLoss, setStopLoss] = useState<number | undefined>(undefined);
